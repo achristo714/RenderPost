@@ -1,0 +1,5 @@
+{
+  "_readme": "Model catalog for Render Post. The app merges this over its built-in models on launch. Keys are stable ids; 'recommended': true shows by default, false sits behind 'show all'. See the catalog dialog in the app for the full field reference.",
+  "image": {},
+  "video": {}
+}

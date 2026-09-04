@@ -1,0 +1,30 @@
+# Builds RenderPost.exe on every push to main and on version tags.
+# A tag like v1.8.1 also creates a GitHub Release with the exe attached and RELEASE_NOTES.md as the body.
+name: Build RenderPost.exe
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyinstaller fal-client pillow imageio-ffmpeg
+      - run: pyinstaller --onefile --noconsole --name RenderPost --collect-all fal_client --collect-all httpx --collect-all imageio_ffmpeg --icon RenderPost.ico RenderPost.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RenderPost
+          path: dist/RenderPost.exe
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Render Post ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: dist/RenderPost.exe
