@@ -1,4 +1,5 @@
-# Builds RenderPost.exe on every push to main and on version tags.
+# Builds RenderPost.exe on every push to main, on version tags, and on every pull request
+# against main (so reviewers can check a PR head actually builds; PR builds never release).
 # On a push to main it reads APP_VERSION from RenderPost.py. If no release exists for that
 # version yet, it creates the tag and the GitHub Release with RELEASE_NOTES.md as the body and
 # the exe attached. So: bump APP_VERSION in the PR, merge, and the release appears on its own.
@@ -8,6 +9,8 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: write
