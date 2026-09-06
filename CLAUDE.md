@@ -36,7 +36,9 @@ Ignored and never committed: `build/`, `dist/`, `*.spec`, `__pycache__/`, `enhan
   ruleset.
 - One topic per PR. A refactor PR contains no behavior changes. A feature PR contains no
   unrelated refactoring. Reviewers cannot verify a mixed PR.
-- Do not create tags or releases from a collaborator session. Releases are cut by Andy.
+- Releases are part of the job, not a separate ask. When a PR that changes app behavior is
+  merged, the session that did the work cuts the release (see Release below). Users only see
+  the change once a release exists; a merged PR with no release is unfinished work.
 
 ## Working rules
 
@@ -88,10 +90,25 @@ Ignored and never committed: `build/`, `dist/`, `*.spec`, `__pycache__/`, `enhan
    `dist\RenderPost.exe`, and repeat step 2 inside the exe. The exe is what users run.
 4. In the PR description state what you ran. "Compiles" is not verification.
 
-## Release (Andy only)
+## Release (do this after every merged PR that changes the app)
 
-1. Bump `APP_VERSION` in `RenderPost.py`. Update `RELEASE_NOTES.md` and add a `CHANGELOG.md`
-   entry.
-2. Commit to `main`, then `git tag -a vX.Y.Z -m "Render Post vX.Y.Z"` and `git push origin vX.Y.Z`.
-3. The workflow builds the exe and publishes the Release. The app's header shows the update
-   link to every user once the release exists.
+Tags are not covered by the `main` ruleset, so a collaborator session can and should do this.
+
+1. In the PR itself: bump `APP_VERSION` in `RenderPost.py`, rewrite `RELEASE_NOTES.md` for
+   this version, and add a `CHANGELOG.md` entry. Patch bump (`1.8.2`) for fixes, minor bump
+   (`1.9.0`) for features. A PR that changes app behavior without a version bump is incomplete.
+2. After the PR is merged, tag the merge commit on `main`:
+   ```
+   git fetch origin main
+   git tag -a vX.Y.Z -m "Render Post vX.Y.Z" origin/main
+   git push origin vX.Y.Z
+   ```
+3. Watch the "Build RenderPost.exe" run for the tag. When it is green, confirm the Release at
+   `https://github.com/achristo714/RenderPost/releases/latest` shows `RenderPost.exe` as an
+   asset. Post that URL in the PR or to Andy. The app's header shows the update link to every
+   user once the release exists.
+4. If the run fails, fix forward on a new branch and PR. Do not delete or move a published
+   tag. Do not hand-upload an exe built locally; the release asset always comes from the
+   workflow so every user gets the same build.
+
+Refactor-only or docs-only PRs (no behavior change) merge without a release.
