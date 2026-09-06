@@ -36,7 +36,7 @@ pip install pyinstaller fal-client pillow imageio-ffmpeg
 build.bat
 ```
 
-`dist\RenderPost.exe` is the whole product. Or push to this repo: the GitHub Action builds the exe on every push and attaches it to a Release on every `v*` tag.
+`dist\RenderPost.exe` is the whole product. Or merge to `main` in this repo: the GitHub Action builds the exe on every push to `main` and, when `APP_VERSION` is new, publishes a Release with the exe attached.
 
 To run without building: `python RenderPost.py`. Add `--demo` to click around with fake results and no key.
 

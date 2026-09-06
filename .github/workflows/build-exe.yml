@@ -1,5 +1,8 @@
 # Builds RenderPost.exe on every push to main and on version tags.
-# A tag like v1.8.1 also creates a GitHub Release with the exe attached and RELEASE_NOTES.md as the body.
+# On a push to main it reads APP_VERSION from RenderPost.py. If no release exists for that
+# version yet, it creates the tag and the GitHub Release with RELEASE_NOTES.md as the body and
+# the exe attached. So: bump APP_VERSION in the PR, merge, and the release appears on its own.
+# A manually pushed tag like v1.8.1 still works the same way.
 name: Build RenderPost.exe
 on:
   push:
@@ -22,9 +25,24 @@ jobs:
         with:
           name: RenderPost
           path: dist/RenderPost.exe
-      - if: startsWith(github.ref, 'refs/tags/v')
+      - name: Read APP_VERSION and check for an existing release tag
+        id: ver
+        shell: bash
+        run: |
+          v=$(sed -nE 's/^APP_VERSION = "([^"]+)".*/\1/p' RenderPost.py | head -1)
+          if [ -z "$v" ]; then echo "APP_VERSION not found in RenderPost.py"; exit 1; fi
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then tag="$GITHUB_REF_NAME"; else tag="v$v"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"; echo "Tag $tag already exists, no new release."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"; echo "Tag $tag is new, will release."
+          fi
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && steps.ver.outputs.exists == 'false')
         uses: softprops/action-gh-release@v2
         with:
-          name: Render Post ${{ github.ref_name }}
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Render Post ${{ steps.ver.outputs.tag }}
           body_path: RELEASE_NOTES.md
           files: dist/RenderPost.exe
