@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.8.4
+- GPT Image 2 replaced by GPT Image 2.5 Flare (default) and Sunburst. Saved configs on GPT Image 2 move to Flare. Quality gains Extra high and Max. Spend estimate for GPT models now uses fal's per-quality, per-size price table instead of a flat $0.25.
+
 ## 1.8.3
 - Character activation moved from a global batch switch to a per-image checkbox, with an optional
   per-image placement/pose note that combines with the existing project-wide note. Seedance

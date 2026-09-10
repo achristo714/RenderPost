@@ -39,7 +39,7 @@ from prompts import (
 )
 
 APP_NAME = "RenderPost"
-APP_VERSION = "1.8.3"
+APP_VERSION = "1.8.4"
 # Optional: where the exe checks for a newer release. Point this at your GitHub repo's
 # latest-release API and the header shows an "Update available" link when a newer tag exists.
 # e.g. "https://api.github.com/repos/YOURNAME/renderpost/releases/latest"   ("" = don't check)
@@ -47,8 +47,10 @@ UPDATE_URL = "https://api.github.com/repos/achristo714/RenderPost/releases/lates
 DEMO = "--demo" in sys.argv
 
 MODELS = {
-    "gpt-image-2":     {"label": "GPT Image 2 · OpenAI", "endpoint": "openai/gpt-image-2/edit", "kind": "gpt", "recommended": True,
-                        "hint": "strongest at photoreal materials and people · token priced, roughly $0.10 to $0.40 per image"},
+    "gpt-image-2.5-flare":    {"label": "GPT Image 2.5 Flare · OpenAI", "endpoint": "openai/gpt-image-2.5/flare/edit", "kind": "gpt", "recommended": True,
+                               "hint": "fast tier · strongest at photoreal materials and people · token priced, about $0.01 to $0.40 per image by quality and size"},
+    "gpt-image-2.5-sunburst": {"label": "GPT Image 2.5 Sunburst · OpenAI", "endpoint": "openai/gpt-image-2.5/sunburst/edit", "kind": "gpt", "recommended": True,
+                               "hint": "precision tier · slower, same price as Flare · for demanding edits where detail must hold"},
     "nano-banana-pro": {"label": "Nano Banana Pro · Google", "endpoint": "fal-ai/nano-banana-pro/edit", "kind": "nano", "recommended": True,
                         "price": 0.15, "mult": {"1K": 1, "2K": 1, "4K": 2},
                         "hint": "deeper reasoning, tends to preserve geometry better · $0.15 per image, 4K double"},
@@ -96,9 +98,9 @@ MAX_UPLOAD_EDGE = 3840
 FAL_MAX_EDGE, FAL_MIN_PIXELS, FAL_MAX_PIXELS = 3840, 655_360, 8_294_400
 
 SIZE_OPTIONS = {"1536": "Standard (1.5K)", "2048": "2K", "3072": "3K", "3840": "4K"}
-QUALITY_OPTIONS = {"low": "Low (fast, cheap)", "medium": "Medium", "high": "High"}
+QUALITY_OPTIONS = {"low": "Low (fast, cheap)", "medium": "Medium", "high": "High", "xhigh": "Extra high", "max": "Max (slow, costly)"}
 
-DEFAULT_CONFIG = {"fal_key": "", "model": "gpt-image-2", "quality": "medium", "long_edge": "3072",
+DEFAULT_CONFIG = {"fal_key": "", "model": "gpt-image-2.5-flare", "quality": "medium", "long_edge": "3072",
                   "resolution": "2K", "variations": "1", "angles": "6", "style_notes": "", "review_first": True,
                   "video_model": "h3max", "video_res": "480p", "show_all_models": False, "video_duration": "5", "take_duration": "15", "video_audio": True,
                   "crossfade": "0.6", "motion_notes": "", "shots": "1", "video_frames": "[]", "energy": "calm",
@@ -119,7 +121,16 @@ def config_dir():
 
 
 FOLDER_KEYS = ("style_notes", "motion_notes", "video_frames", "character_note", "character_desc", "take_character", "spend")
-GPT_IMAGE_EST = 0.25            # GPT Image 2 is token priced; this is the working average used for the running total          # these live with the render folder, not the user
+LEGACY_MODELS = {"gpt-image-2": "gpt-image-2.5-flare"}     # saved config ids from older builds -> current id
+# GPT Image 2.5 is token priced. Estimate per image by quality and output long edge, from fal's published
+# 16:9 price rows (Sep 2026): 1920x1080, 2560x1440, midpoint to 3840x2160, 3840x2160. Flare and Sunburst cost the same.
+GPT_IMAGE_EST = {
+    "low":    {"1536": 0.0044, "2048": 0.0062, "3072": 0.0086, "3840": 0.0111},
+    "medium": {"1536": 0.0103, "2048": 0.0143, "3072": 0.0201, "3840": 0.0260},
+    "high":   {"1536": 0.0396, "2048": 0.0553, "3072": 0.0777, "3840": 0.1001},
+    "xhigh":  {"1536": 0.0704, "2048": 0.0983, "3072": 0.1381, "3840": 0.1779},
+    "max":    {"1536": 0.1584, "2048": 0.2211, "3072": 0.3107, "3840": 0.4003},
+}
 
 
 def folder_settings_path():
@@ -134,6 +145,7 @@ def load_config():
             cfg.update(json.loads(p.read_text(encoding="utf-8")))
         except Exception:
             pass
+    cfg["model"] = LEGACY_MODELS.get(cfg.get("model"), cfg.get("model"))
     for k in FOLDER_KEYS:
         cfg[k] = "" if k != "spend" else 0
     fp = folder_settings_path()
@@ -980,7 +992,8 @@ class State:
         m = MODELS.get(cfg["model"], {})
         if m.get("price"):
             return m["price"] * (m.get("mult", {}).get(cfg.get("resolution"), 1)) * n
-        return GPT_IMAGE_EST * n
+        q = GPT_IMAGE_EST.get(cfg.get("quality"), GPT_IMAGE_EST["high"])
+        return q.get(str(cfg.get("long_edge")), q["3072"]) * n
 
     def video_cost(self, c, cfg):
         m = VIDEO_MODELS.get(c.get("vmodel") or "seedance", {})
@@ -1420,7 +1433,7 @@ class Handler(BaseHTTPRequestHandler):
             if "take_character" in body:
                 cfg["take_character"] = bool(body["take_character"])
             if cfg["model"] not in MODELS:
-                cfg["model"] = "gpt-image-2"
+                cfg["model"] = DEFAULT_CONFIG["model"]
             if "review_first" in body:
                 cfg["review_first"] = bool(body["review_first"])
             if body.get("fal_key"):
