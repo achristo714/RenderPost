@@ -5,18 +5,21 @@ Read this whole file before changing anything. It is short on purpose.
 
 ## What this is
 
-A single-file Python app that becomes one Windows exe. `RenderPost.py` starts a local HTTP
-server, opens a browser page, and runs AI enhancement, angles, characters and video on a folder
-of architectural renders through the user's own fal.ai key. There is no framework, no database
-and no test suite. The product is `dist\RenderPost.exe`, built by PyInstaller.
+A small Python app that becomes one Windows exe. `RenderPost.py` starts a local HTTP server,
+opens a browser page, and runs AI enhancement, angles, characters and video on a folder of
+architectural renders through the user's own fal.ai key. There is no framework, no database and
+no test suite. The product is `dist\RenderPost.exe`, built by PyInstaller.
 
 ## Repo layout
 
 | Path | What belongs there |
 | --- | --- |
-| `RenderPost.py` | The whole app: constants, prompt briefs, `Fal` client, `DemoFal`, `State`, `Handler` (all `/api/*` routes), the inline `PAGE` HTML/CSS/JS, `main()`. |
+| `RenderPost.py` | The app: constants, `Fal` client, `DemoFal`, `State`, `Handler` (all `/api/*` and `/static/*` routes), `main()`. Entry point for the exe. |
+| `prompts.py` | The art-director prompt briefs (`BASE_BRIEF`, `ANGLES_BRIEF`, `TAKE_BRIEF`, `ENERGY`, and so on). Edit prompt wording here. |
+| `web/templates/index.html`, `web/static/app.css`, `web/static/app.js` | The single-page UI. Plain HTML, CSS and JS, served by the app and bundled into the exe with `--add-data "web;web"`. |
+| `requirements.txt` | Python dependencies. `build.bat` and the workflow both install from it. |
 | `models.json` | Model catalog the app fetches on launch from `main`. Editing it changes every user's model list without a rebuild. |
-| `build.bat` | Local Windows build. Its `pyinstaller` line must stay identical to the one in the workflow. |
+| `build.bat` | Local Windows build. Its PyInstaller line must stay identical to the one in the workflow. |
 | `.github/workflows/build-exe.yml` | Builds the exe on every push to `main`. If `APP_VERSION` has no tag yet, it also creates the tag and the GitHub Release with `RELEASE_NOTES.md` as the body. |
 | `RELEASE_NOTES.md` | Body of the next release. Rewritten each release. |
 | `CHANGELOG.md` | Running history. Append, do not rewrite. |
@@ -36,9 +39,11 @@ Ignored and never committed: `build/`, `dist/`, `*.spec`, `__pycache__/`, `enhan
   ruleset.
 - One topic per PR. A refactor PR contains no behavior changes. A feature PR contains no
   unrelated refactoring. Reviewers cannot verify a mixed PR.
-- Every behavior change ships. A PR that changes the app bumps `APP_VERSION` and updates the
-  release notes in the same PR; the workflow publishes the release when the merge lands on
-  `main` (see Release below). Users only see the change once a release exists.
+- If the exe changes, it ships. Any PR that touches `RenderPost.py`, `prompts.py`, `web/`,
+  `requirements.txt`, `build.bat` or the workflow bumps `APP_VERSION` and updates the release
+  notes in the same PR, refactors included; the workflow publishes the release when the merge
+  lands on `main` (see Release below). Only docs-only changes (README, CLAUDE.md, CHANGELOG,
+  docs/) skip the bump. Everyone runs the exe, so an unreleased merge is invisible.
 
 ## Working rules
 
@@ -64,15 +69,15 @@ Ignored and never committed: `build/`, `dist/`, `*.spec`, `__pycache__/`, `enhan
 
 ## Code conventions (match what is there)
 
-- Constants and prompt briefs live at the top of the file as module-level names in
-  `UPPER_SNAKE`. Prompt text is a plain triple-quoted string; edit wording there, not inline in
-  handlers.
+- Constants live at the top of `RenderPost.py` as module-level `UPPER_SNAKE` names. Prompt briefs
+  live in `prompts.py` as plain triple-quoted strings; edit wording there, not inline in handlers.
 - All fal calls go through the `Fal` class. `DemoFal` mirrors its interface with fake results so
   `--demo` mode works without a key. Any new `Fal` method needs a `DemoFal` twin.
 - Network calls are wrapped in `with_retry()` (3 attempts, exponential backoff, no retry on 401
   or 402). User-facing error text comes from `friendly(e)`; add new mappings there rather than
   building messages in handlers.
-- Routes are `if path == "/api/...":` blocks in `Handler`. JSON in, JSON out. Long work runs on
+- Routes are `if path == "/api/...":` blocks in `Handler`. JSON in, JSON out. The UI is served
+  from `web/` via `resource_path()`, which resolves to the PyInstaller bundle when frozen. Long work runs on
   the `ThreadPoolExecutor`; the handler returns immediately and the page polls `/api/state`.
 - App state is the single `State` instance. Per-folder settings persist in the render folder,
   user settings in `%APPDATA%\RenderPost\config.json`.
@@ -96,10 +101,10 @@ The workflow does the release. On every push to `main` it builds the exe, reads 
 from `RenderPost.py`, and if no tag exists for that version it creates the tag and the GitHub
 Release with `RELEASE_NOTES.md` as the body and the exe attached. Nobody pushes tags by hand.
 
-So a PR that changes app behavior must carry its own release:
+So any PR that changes what goes into the exe must carry its own release:
 
-1. Bump `APP_VERSION` in `RenderPost.py`. Patch bump (`1.8.2`) for fixes, minor bump (`1.9.0`)
-   for features. Two open PRs must not claim the same version; the second one rebases and
+1. Bump `APP_VERSION` in `RenderPost.py`. Patch bump (`1.8.3`) for fixes and refactors, minor
+   bump (`1.9.0`) for features. Two open PRs must not claim the same version; the second one rebases and
    bumps again.
 2. Rewrite `RELEASE_NOTES.md` for this version. It becomes the release body verbatim.
 3. Add a `CHANGELOG.md` entry.
@@ -108,10 +113,12 @@ So a PR that changes app behavior must carry its own release:
    `RenderPost.exe` as an asset. Post that URL in the PR. The app's header shows the update
    link to every user once the release exists.
 
-A behavior change merged without a version bump is a bug: users never see it. If the release
+A code change merged without a version bump is a bug: users never see it, and the exe they run
+no longer matches `main`. If the release
 run fails, fix forward on a new branch and PR with another bump. Do not delete or move a
 published tag. Do not hand-upload a locally built exe; the asset always comes from the
 workflow so every user gets the same build.
 
-Refactor-only or docs-only PRs (no behavior change) leave `APP_VERSION` alone and produce no
-release.
+Docs-only PRs leave `APP_VERSION` alone and produce no release. A refactor is not docs-only:
+it changes the exe, so it bumps and ships, with release notes that say "internal restructure,
+no user-facing changes".

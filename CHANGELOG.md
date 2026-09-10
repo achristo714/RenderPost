@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.8.2
+- Internal restructure: prompt briefs moved to `prompts.py`, page HTML/CSS/JS moved to `web/` and bundled into the exe. Dependencies listed in `requirements.txt`. No behavior change. (Filip Filyov)
+
 ## 1.8.1
 - Update check and model catalog point at this repository.
 

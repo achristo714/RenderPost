@@ -38,7 +38,7 @@ from prompts import (
 )
 
 APP_NAME = "RenderPost"
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.8.2"
 # Optional: where the exe checks for a newer release. Point this at your GitHub repo's
 # latest-release API and the header shows an "Update available" link when a newer tag exists.
 # e.g. "https://api.github.com/repos/YOURNAME/renderpost/releases/latest"   ("" = don't check)
