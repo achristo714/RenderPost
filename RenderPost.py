@@ -39,7 +39,7 @@ from prompts import (
 )
 
 APP_NAME = "RenderPost"
-APP_VERSION = "1.8.4"
+APP_VERSION = "1.8.5"
 # Optional: where the exe checks for a newer release. Point this at your GitHub repo's
 # latest-release API and the header shows an "Update available" link when a newer tag exists.
 # e.g. "https://api.github.com/repos/YOURNAME/renderpost/releases/latest"   ("" = don't check)
@@ -120,6 +120,7 @@ def config_dir():
     return d
 
 
+FOLDER_FILE_LOCK = threading.Lock()   # renderpost.json is read-modify-written from worker threads and the UI; serialize it
 FOLDER_KEYS = ("style_notes", "motion_notes", "video_frames", "character_note", "character_desc", "take_character", "spend")
 LEGACY_MODELS = {"gpt-image-2": "gpt-image-2.5-flare"}     # saved config ids from older builds -> current id
 # GPT Image 2.5 is token priced. Estimate per image by quality and output long edge, from fal's published
@@ -164,14 +165,15 @@ def save_config(cfg):
     (config_dir() / "config.json").write_text(json.dumps(user, indent=2), encoding="utf-8")
     fp = folder_settings_path()
     if fp:
-        keep = {}
-        if fp.exists():
-            try:
-                keep = json.loads(fp.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        keep.update({k: cfg.get(k, "") for k in FOLDER_KEYS if k != "spend"})
-        fp.write_text(json.dumps(keep, indent=2), encoding="utf-8")
+        with FOLDER_FILE_LOCK:
+            keep = {}
+            if fp.exists():
+                try:
+                    keep = json.loads(fp.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            keep.update({k: cfg.get(k, "") for k in FOLDER_KEYS if k != "spend"})
+            fp.write_text(json.dumps(keep, indent=2), encoding="utf-8")
 
 
 # ---------------------------------------------------------------- folder
@@ -981,10 +983,11 @@ class State:
     def add_spend(self, amount):
         """Estimated dollars, accumulated per project in renderpost.json."""
         try:
-            fp = folder_settings_path()
-            d = json.loads(fp.read_text(encoding="utf-8")) if fp and fp.exists() else {}
-            d["spend"] = round(float(d.get("spend") or 0) + float(amount), 4)
-            fp.write_text(json.dumps(d, indent=2), encoding="utf-8")
+            with FOLDER_FILE_LOCK:
+                fp = folder_settings_path()
+                d = json.loads(fp.read_text(encoding="utf-8")) if fp and fp.exists() else {}
+                d["spend"] = round(float(d.get("spend") or 0) + float(amount), 4)
+                fp.write_text(json.dumps(d, indent=2), encoding="utf-8")
         except Exception:
             pass
 

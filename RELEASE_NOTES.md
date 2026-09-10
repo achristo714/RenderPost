@@ -1,12 +1,5 @@
-## Render Post v1.8.4
+## Render Post v1.8.5
 
-GPT Image 2 is gone. In its place: **GPT Image 2.5 Flare** (the new default) and **GPT Image 2.5 Sunburst**.
+One fix. The running spend in the header could undercount when several images finished at the same moment: three workers each read the total, added their own image, and wrote it back, so one addition was lost. Writes to the project settings file are now serialized. Past totals are not corrected; new ones are right.
 
-- **Flare** is the fast tier: the same photoreal strengths as before, up to half the latency.
-- **Sunburst** is the precision tier: slower, priced the same, for edits where fine detail has to hold.
-- If your saved model was GPT Image 2, you are moved to Flare automatically.
-- Quality gets two new steps above High: **Extra high** and **Max**. Cost climbs steeply with them, so the running spend estimate now follows fal's published price table by quality and output size instead of a flat $0.25 an image. At Medium and 3K a Flare image is about 2 cents; at Max and 4K about 40 cents.
-
-Nano Banana Pro and Nano Banana 2 are unchanged.
-
-Not yet verified against live fal: the first real Flare and Sunburst runs. The request format is identical to GPT Image 2 per fal's published schema, so no change is expected, but if an enhance fails on either, report it.
+Nothing else changed since 1.8.4.
