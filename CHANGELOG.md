@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.8.5
+- Fix: running spend could undercount when several images finished at the same moment. The project settings file is now written under a lock.
+
 ## 1.8.4
 - GPT Image 2 replaced by GPT Image 2.5 Flare (default) and Sunburst. Saved configs on GPT Image 2 move to Flare. Quality gains Extra high and Max. Spend estimate for GPT models now uses fal's per-quality, per-size price table instead of a flat $0.25.
 
