@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Render Post</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23131211'/%3E%3Cg stroke='%23FF5A1E' stroke-width='2.4' stroke-linecap='round' fill='none'%3E%3Cpath d='M26 9h-6M14 9H6M26 16h-8M12 16H6M26 23h-4M16 23H6M17 6.5v5M10 13.5v5M19 20.5v5'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <h1><i></i>Render Post <span class="ver" id="ver"></span></h1>
+  <a class="update" id="update" href="#" target="_blank" rel="noopener" hidden></a>
+  <div class="meta" id="meta"></div>
+  <div class="seg views" role="group" aria-label="Section">
+    <button data-view="images" aria-pressed="true">Images</button>
+    <button data-view="picks" id="pickstab">Picks</button>
+    <button data-view="video" id="videotab">Video</button>
+  </div>
+  <div class="seg wipeseg" role="group" aria-label="View">
+    <button data-mode="before">Before</button>
+    <button data-mode="wipe" aria-pressed="true">Wipe</button>
+    <button data-mode="after">After</button>
+  </div>
+  <div class="status" id="spend" title="Estimated spend on this project, from fal's published rates. GPT Image 2 counts as $0.25 per image."></div>
+  <div class="status" id="status"></div>
+  <button class="btn" id="stop" type="button" hidden title="Cancel everything queued or in progress">Stop</button>
+  <button class="btn quiet" id="quit" type="button" title="Stops Render Post">Quit</button>
+</header>
+
+<main id="main">
+  <section class="setup" id="setup">
+    <div class="f">
+      <span class="label">Style notes · used whenever a prompt is written</span>
+      <textarea id="notes" rows="2" placeholder="Optional, in plain English. e.g. cooler white balance, dusk lighting, no people, autumn trees. Prompts already written keep their text; press New batch or Rewrite to apply notes to them."></textarea>
+    </div>
+    <div class="morewrap" id="morewrap">
+    <div class="charblock" id="charblock">
+      <div class="charthumb" id="charthumb"><span class="label">No character</span></div>
+      <div class="charbody">
+        <div class="row"><span class="label">Character · off by default</span>
+          <label class="showall" style="float:none"><input type="checkbox" id="charon"> use in enhancements and angles</label></div>
+        <div class="hint">One consistent person across the whole set. Generate one from a description, or upload a person you have the rights to use. Real photos of strangers are a rights problem and trip model filters; generated people are safest.</div>
+        <div class="charrow">
+          <input class="field" id="chardesc" placeholder="Describe a person to generate, e.g. woman in her 30s, dark hair tied back, linen shirt, tailored trousers">
+          <button class="btn" id="chargen" type="button">Generate</button>
+          <button class="btn quiet" id="charupload" type="button">Upload</button>
+          <button class="btn quiet" id="charclear" type="button" hidden>Remove</button>
+          <input type="file" id="charfile" accept="image/*" hidden>
+        </div>
+        <input class="field" id="charnote" placeholder="Optional notes about how they appear: seated, reading, carrying a bag, never facing camera…">
+      </div>
+    </div>
+    <div class="controls">
+      <div class="f wide"><span class="label">Model <label class="showall"><input type="checkbox" id="showall"> show all</label><button class="linkbtn" id="catalogbtn" type="button" title="Where extra models come from">catalog</button></span><select id="model"></select><span class="hint" id="modelhint"></span></div>
+      <div class="f gpt"><span class="label">Quality</span><select id="quality"></select></div>
+      <div class="f gpt"><span class="label">Output size · long edge</span><select id="size"></select></div>
+      <div class="f nano"><span class="label">Resolution</span><select id="resolution"></select></div>
+      <div class="f wide"><span class="label">Before spending credits</span><select id="review"><option value="1">Write prompts first, let me review</option><option value="0">Enhance straight away</option></select></div>
+      <div class="f more"><span class="label">Variations</span><select id="variations"></select></div>
+      <div class="f more"><span class="label">Angles per run</span><select id="angles"></select></div>
+      <div class="f more"><span class="label">Spend warning at</span><div class="f inline"><span class="label">$</span><input class="field" id="spendalert" type="number" min="1" step="1" style="width:90px"></div></div>
+    </div>
+    </div>
+    <div class="bar">
+      <div class="l">
+        <button class="btn quiet" id="moretoggle" type="button">More</button>
+        <div class="hint" id="folderhint"></div>
+        <button class="btn icon" id="switchfolder" type="button" title="Work on a different folder of renders"><svg viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/><path d="M8 7v4M6 9h4"/></svg>New project</button>
+        <button class="btn icon" id="openfolder" type="button" title="Open the enhanced folder"><svg viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/></svg>Open folder</button>
+        <button class="btn icon" id="rescan" type="button" title="Look for renders added since launch"><svg viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6"/><path d="M13 2.5v3h-3"/></svg>Rescan</button>
+      </div>
+      <div class="r">
+        <span class="saved" id="selinfo" hidden></span>
+        <span class="saved" id="estimate"></span>
+        <span class="saved" id="stale" hidden></span>
+        <span class="saved" id="saved"></span>
+        <button class="btn quiet" id="exportimg" type="button" hidden title="Save every image prompt with its version file and the fal-hosted raw URL to enhanced/prompts-export.json">Export prompts</button>
+        <button class="btn quiet" id="keybtn" type="button">Change key</button>
+        <button class="btn" id="run" type="button">Write prompts</button>
+        <button class="btn" id="newbatch" type="button" title="Write a fresh prompt for every image using the current style notes">New batch</button>
+        <button class="btn solid" id="enhance" type="button">Enhance all</button>
+      </div>
+    </div>
+  </section>
+  <div class="viewbar" id="viewbar"><div class="seg small" role="group" aria-label="Layout"><button data-imgmode="grid">Grid</button><button data-imgmode="detail" aria-pressed="true">Detail</button></div><span class="hint" id="gridhint">Grid shows the latest version of each image; click one to open it.</span></div>
+  <div class="imggrid" id="imggrid" hidden></div>
+  <div class="pickbar" id="pickbar"></div>
+  <div class="pickgrid" id="pickgrid"></div>
+  <div id="cards"></div>
+
+  <div id="videoview" hidden>
+    <section class="setup vstep" id="vframes">
+      <div class="vhead"><div><span class="label">Step 1 · Frames</span><div class="hint">Click a version to add it to the video set. Click again to remove. Order is the order you add them.</div></div>
+        <span class="saved" id="framecount"></span></div>
+      <div class="framegrid" id="framegrid"></div>
+    </section>
+
+    <section class="setup vstep" id="vmakepanel">
+      <div class="vhead"><div><span class="label">Step 2 · Make clips</span><div class="hint" id="vexplain"></div></div>
+        <div class="seg small" role="group" aria-label="Video mode">
+          <button data-vmode="clips" aria-pressed="true" title="Each frame becomes its own separate video">Separate videos</button>
+          <button data-vmode="take" title="One video that travels through all frames in order · always Seedance · experimental">One video through all frames</button>
+        </div></div>
+      <div class="f"><span class="label">Motion notes · used whenever a motion prompt is written</span>
+        <textarea id="mnotes" rows="2" placeholder="Optional. e.g. slow push-ins only, no people, evening ambience, keep it still and calm."></textarea></div>
+      <div class="controls">
+        <div class="f wide clipsonly"><span class="label">Video model <label class="showall"><input type="checkbox" id="vshowall"> show all</label></span><select id="vmodel"></select><span class="hint" id="vmodelhint"></span></div>
+        <div class="f clipsonly"><span class="label">Shots per clip</span><select id="shots"><option value="1">1 · one continuous camera move</option><option value="2">2 · cuts to a second angle</option><option value="3">3 · cuts through three angles</option></select></div>
+        <div class="f resonly"><span class="label">Resolution</span><select id="vres"></select></div>
+        <div class="f clipsonly"><span class="label">Clip length</span><select id="vdur"></select></div>
+        <div class="f takeonly"><span class="label">Take length</span><select id="tdur"></select></div>
+        <div class="f takeonly wide"><span class="label">Character in the take</span><label class="showall" style="float:none;font-size:12px;color:var(--em-ink)"><input type="checkbox" id="takechar"> add the project character as a reference</label><span class="hint">Seedance reference-to-video with the character as the last @Image. Its filter may refuse realistic people; a generated character passes more often.</span></div>
+        <div class="f"><span class="label">Sound</span><select id="vaudio"><option value="1">Ambient audio</option><option value="0">Silent</option></select></div>
+        <div class="f"><span class="label">Camera energy</span><select id="energy"><option value="calm">Calm · barely moves</option><option value="moderate">Moderate · clear move</option><option value="dynamic">Dynamic · bold, real parallax</option></select></div>
+      </div>
+      <div class="f"><span class="label">Video set<span class="takeonly"> · order matters, use the arrows</span></span><div class="pickstrip" id="pickstrip"></div></div>
+      <div class="bar">
+        <div class="l"><span class="saved" id="vestimate"></span></div>
+        <div class="r">
+          <button class="btn quiet" id="vexport" type="button" hidden title="Save every motion prompt with its hosted frame URL to enhanced/video/prompts-export.json, for use in other video tools">Export prompts</button>
+          <button class="btn quiet" id="vclear" type="button" hidden title="Remove prompts that haven't been sent">Clear unsent</button>
+          <button class="btn" id="vprompts" type="button">Write motion prompts</button>
+          <button class="btn solid" id="vmake" type="button">Make clips</button>
+        </div>
+      </div>
+      <div class="clips" id="clips"></div>
+    </section>
+
+    <section class="setup vstep" id="vreel">
+      <div class="vhead"><div><span class="label">Step 3 · Reel</span><div class="hint">Press "Add to reel" on finished clips in the order you want them; the badge shows each clip's place. Crossfade and optional music. Made on this computer, free.</div></div>
+        <button class="btn icon" id="openvideo" type="button" title="Open the video folder"><svg viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/></svg>Open video folder</button></div>
+      <div class="bar stitch" id="stitchbar">
+        <div class="l">
+          <div class="f inline"><span class="label">Crossfade</span><select id="crossfade"><option value="0">Cut</option><option value="0.4">0.4 s</option><option value="0.6">0.6 s</option><option value="1">1 s</option></select></div>
+          <div class="f inline"><span class="label">Music</span><select id="music"><option value="">None</option></select><button class="btn icon" id="openmusic" type="button" title="Open the render folder. Drop an mp3 or wav there and it appears in this list."><svg viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/></svg></button></div>
+          <div class="f inline" id="mstartwrap" hidden><span class="label">Start at</span><input class="field" id="mstart" type="number" min="0" step="1" value="0" style="width:74px" title="Seconds into the track to start from"> <span class="label">s</span></div>
+          <span class="hint" id="musichint">No tracks yet: press the folder button, drop an mp3 or wav in, then Rescan.</span>
+        </div>
+        <div class="r"><span class="saved" id="stitchhint"></span><button class="btn solid" id="stitch" type="button">Stitch</button></div>
+      </div>
+      <div class="clips" id="reels"></div>
+    </section>
+  </div>
+</main>
+
+<div class="scrim" id="keymodal" hidden>
+  <div class="modal">
+    <h2>Add your fal key</h2>
+    <p>This tool runs on your own fal.ai account. Create a key at <a href="https://fal.ai/dashboard/keys" target="_blank" rel="noopener">fal.ai/dashboard/keys</a> and paste it here. It's stored on this computer only, never inside your render folder.</p>
+    <input class="field" id="keyinput" type="password" placeholder="Paste key" autocomplete="off" spellcheck="false">
+    <div class="err" id="keyerr" hidden></div>
+    <div class="actions"><button class="btn quiet" id="keycancel" type="button" hidden>Cancel</button><button class="btn solid" id="keysave" type="button">Save key</button></div>
+  </div>
+</div>
+
+<div class="scrim" id="catalogmodal" hidden>
+  <div class="modal" style="width:560px">
+    <h2>Model catalog</h2>
+    <p>Extra models come from a JSON file at a URL you host (GitHub raw file, your site, anywhere public). Render Post reads it on launch and merges it over the built-in models, so new models can be added or re-priced without a new build. Models marked <span class="mono">recommended</span> show by default; the rest sit behind "show all".</p>
+    <input class="field" id="catalogurl" placeholder="https://…/renderpost-models.json" spellcheck="false">
+    <div class="hint" id="catalogstatus" style="font-family:var(--em-font-mono);font-size:11px;color:var(--em-ink-dim)"></div>
+    <details><summary class="label" style="cursor:pointer">File format</summary>
+<pre class="mono" style="font-size:10.5px;line-height:1.5;color:var(--em-ink-dim);background:var(--em-bg-inset);border:1px solid var(--em-line);border-radius:var(--em-r-sm);padding:10px;overflow:auto;max-height:36vh">{
+  "image": {
+    "my-model": {
+      "label": "My Model · Vendor",
+      "endpoint": "vendor/my-model/edit",
+      "kind": "nano",                  // "nano": image_urls + resolution; "gpt": image_urls + quality + image_size
+      "recommended": false,
+      "hint": "what it's good at · price",
+      "price": 0.10, "mult": {"1K": 1, "2K": 1, "4K": 2}
+    }
+  },
+  "video": {
+    "my-video": {
+      "label": "My Video · Vendor",
+      "i2v": "vendor/my-video/image-to-video",   // must accept prompt, image_url, duration, resolution
+      "recommended": false,
+      "hint": "what it's good at · price",
+      "res": {"480p": "480p", "720p": "720p"},   // omit if the model has no resolution setting
+      "min_duration": 5,
+      "price": {"480p": 0.05, "720p": 0.08}      // per second, keyed by resolution, or {"audio": x, "silent": y}
+    }
+  }
+}</pre></details>
+    <div class="actions"><button class="btn quiet" id="catalogcancel" type="button">Cancel</button><button class="btn solid" id="catalogsave" type="button">Save and reload</button></div>
+  </div>
+</div>
+<div class="scrim" id="foldermodal" hidden>
+  <div class="modal">
+    <h2>Open a folder of renders</h2>
+    <p>Each folder is its own project: its own versions, notes and video set. Nothing here is lost when you switch.</p>
+    <div id="recentlist" class="recent"></div>
+    <div class="actions"><button class="btn quiet" id="foldercancel" type="button">Cancel</button><button class="btn solid" id="folderbrowse" type="button">Browse…</button></div>
+  </div>
+</div>
+<div class="scrim" id="askmodal" hidden>
+  <div class="modal" style="width:420px"><h2 id="asktitle">Confirm</h2><p id="askbody"></p>
+    <div class="actions"><button class="btn quiet" id="askno" type="button">Cancel</button><button class="btn solid" id="askyes" type="button">Continue</button></div></div>
+</div>
+<div class="toasts" id="toasts"></div>
+<div class="hints"><span><b>1 2 3</b>view</span><span><b>J K</b>next · prev</span><span><b>drag</b>wipe</span></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
