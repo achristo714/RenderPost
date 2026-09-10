@@ -1,0 +1,4 @@
+pyinstaller
+fal-client
+pillow
+imageio-ffmpeg
