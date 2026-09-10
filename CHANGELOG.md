@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.8.3
+- Character activation moved from a global batch switch to a per-image checkbox, with an optional
+  per-image placement/pose note that combines with the existing project-wide note. Seedance
+  character warning dialog on first activation per session. Fixed the project-wide character note
+  field not being persisted. (Filip Filyov)
+
 ## 1.8.2
 - Internal restructure: prompt briefs moved to `prompts.py`, page HTML/CSS/JS moved to `web/` and bundled into the exe. Dependencies listed in `requirements.txt`. No behavior change. (Filip Filyov)
 

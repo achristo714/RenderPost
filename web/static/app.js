@@ -12,7 +12,7 @@ async function saveNow(extra={}){
   clearTimeout(saveTimer);
   await api("/api/config", {model:$("#model").value, quality:$("#quality").value, long_edge:$("#size").value, resolution:$("#resolution").value,
     variations:$("#variations").value, angles:$("#angles").value, style_notes:$("#notes").value, review_first:$("#review").value === "1",
-    character_on:$("#charon").checked, character_note:$("#charnote").value, take_character:!!($("#takechar") && $("#takechar").checked),
+    character_note:$("#charnote").value, take_character:!!($("#takechar") && $("#takechar").checked),
     video_res:$("#vres").value, video_duration:$("#vdur").value, take_duration:$("#tdur").value, video_audio:$("#vaudio").value === "1",
     crossfade:$("#crossfade").value, motion_notes:$("#mnotes").value, shots:$("#shots").value, video_frames: JSON.stringify(frames), video_model:$("#vmodel").value, show_all_models:$("#showall").checked, energy:$("#energy").value, ...extra});
   Object.assign(S.config, {style_notes:$("#notes").value, model:$("#model").value, quality:$("#quality").value, long_edge:$("#size").value, resolution:$("#resolution").value, variations:$("#variations").value, angles:$("#angles").value,
@@ -96,13 +96,13 @@ async function boot(){
   $("#catalogbtn").addEventListener("click", () => { $("#catalogurl").value = (S.catalog && S.catalog.url) || ""; $("#catalogstatus").innerHTML = catalogLine(); $("#catalogmodal").hidden = false; });
   $("#catalogcancel").addEventListener("click", () => $("#catalogmodal").hidden = true);
   $("#catalogsave").addEventListener("click", async () => { await api("/api/config", {catalog_url: $("#catalogurl").value}); setTimeout(() => location.reload(), 600); });
-  $("#charon").checked = !!S.config.character_on; $("#charnote").value = S.config.character_note || ""; $("#chardesc").value = S.character.desc || "";
-  $("#charon").addEventListener("change", () => { saveConfig(); renderChar(); });
+  $("#charnote").value = S.config.character_note || ""; $("#chardesc").value = S.character.desc || "";
   $("#charnote").addEventListener("input", () => saveConfig());
-  $("#chargen").addEventListener("click", async () => { const b = $("#chargen"); b.disabled = true; b.textContent = "Generating"; const r = await api("/api/character/generate", {description: $("#chardesc").value}); b.disabled = false; b.textContent = "Generate"; if (r.need_key) { openKey(false); return; } if (r.error) { toast(r.error); return; } await poll(); $("#charon").checked = true; renderChar(); });
+  $("#chargen").addEventListener("click", async () => { const b = $("#chargen"); b.disabled = true; b.textContent = "Generating"; const r = await api("/api/character/generate", {description: $("#chardesc").value}); b.disabled = false; b.textContent = "Generate"; if (r.need_key) { openKey(false); return; } if (r.error) { toast(r.error); return; } await poll(); renderChar(); });
   $("#charupload").addEventListener("click", () => $("#charfile").click());
-  $("#charfile").addEventListener("change", () => { const f = $("#charfile").files[0]; if (!f) return; const rd = new FileReader(); rd.onload = async () => { const r = await api("/api/character/upload", {data: rd.result}); if (r.error) { toast(r.error); return; } await poll(); $("#charon").checked = true; renderChar(); }; rd.readAsDataURL(f); $("#charfile").value = ""; });
-  $("#charclear").addEventListener("click", async () => { if (!await ask("Remove the character from this project?", "Remove character", "Remove")) return; await api("/api/character/clear", {}); await poll(); $("#charon").checked = false; renderChar(); });
+  $("#charfile").addEventListener("change", () => { const f = $("#charfile").files[0]; if (!f) return; const rd = new FileReader(); rd.onload = async () => { const r = await api("/api/character/upload", {data: rd.result}); if (r.error) { toast(r.error); return; } await poll(); renderChar(); }; rd.readAsDataURL(f); $("#charfile").value = ""; });
+  $("#charclear").addEventListener("click", async () => { if (!await ask("Remove the character from this project?", "Remove character", "Remove")) return; await api("/api/character/clear", {}); await poll(); renderChar(); });
+  $("#charwarnok").addEventListener("click", () => { if ($("#charwarndismiss").checked) sessionStorage.setItem("rp_charwarn_dismissed", "1"); $("#charwarnmodal").hidden = true; });
   renderChar();
   $("#foldercancel").addEventListener("click", () => $("#foldermodal").hidden = true);
   $("#folderbrowse").addEventListener("click", async () => { const r = await api("/api/folder", {browse: true}); if (r.error) { toast(r.error); return; } $("#foldermodal").hidden = true; waitForFolder(); });
@@ -131,9 +131,13 @@ function catalogLine(){ const c = S.catalog || {}; if (!c.url) return "No catalo
 function renderChar(){
   const has = !!(S.character && S.character.file);
   $("#charthumb").innerHTML = has ? `<img src="/img/out/${S.character.file}" alt="character">` : `<span class="label">No character</span>`;
-  $("#charclear").hidden = !has; $("#charon").disabled = !has; if (!has) $("#charon").checked = false;
-  $("#charblock").classList.toggle("on", has && $("#charon").checked);
+  $("#charclear").hidden = !has;
+  $("#charblock").classList.toggle("on", has);
   const tc = $("#takechar"); if (tc) { tc.disabled = !has; if (!has) tc.checked = false; }
+}
+function charWarn(){
+  if (sessionStorage.getItem("rp_charwarn_dismissed")) return;
+  $("#charwarndismiss").checked = false; $("#charwarnmodal").hidden = false;
 }
 function openFolderModal(){
   const list = $("#recentlist"); list.innerHTML = (S.recent && S.recent.length) ? S.recent.map(r => `<button type="button" data-path="${esc(r)}" title="${esc(r)}">${esc(r)}</button>`).join("") : `<span class="none">No other projects yet. Browse to a folder of renders.</span>`;
@@ -232,7 +236,7 @@ function render(){
     let art = cards[it.name];
     if (!art) { art = document.createElement("article"); art.tabIndex = -1; art.style.animationDelay = `${Math.min(i,8)*30}ms`; cards[it.name] = art; wrap.appendChild(art); art.dataset.sig = ""; }
     art.classList.toggle("haspick", it.versions.some(v => v.pick)); art.classList.toggle("sel", selected.has(it.name));
-    const sig = JSON.stringify([it.status, it.step, it.versions.map(v => v.file + (v.pick ? "*" : "")), it.error, it.prompt, it.notes_used, selected.has(it.name)]);
+    const sig = JSON.stringify([it.status, it.step, it.versions.map(v => v.file + (v.pick ? "*" : "")), it.error, it.prompt, it.notes_used, selected.has(it.name), it.character_on, !!(S.character && S.character.file)]);
     if (art.dataset.sig === sig) return;           // only rebuild when something changed
     const ta0 = art.querySelector("textarea");
     const editing = ta0 && document.activeElement === ta0;
@@ -253,6 +257,7 @@ function render(){
     const busyItem = it.status === "working" || it.status === "queued";
     const vlabel = (x, i) => x.angle ? "a" + (it.versions.slice(0, i+1).filter(y => y.angle).length) : "v" + (it.versions.slice(0, i+1).filter(y => !y.angle).length);
     const tabs = it.versions.length > 1 ? `<div class="vseg" role="group" aria-label="Version">${it.versions.map((x,i) => `<button type="button" data-i="${i}" aria-pressed="${i===sel}" title="${esc((x.angle ? "angle · " : "") + (x.character ? "with character · " : "") + (x.made || "") + (x.model ? " · " + x.model : ""))}">${vlabel(x, i)}${x.character ? "·" : ""}${x.pick ? "★" : ""}</button>`).join("")}</div>` : "";
+    const hasChar = !!(S.character && S.character.file);
     art.innerHTML = `
       <div class="stage ${v ? "" : "noafter"}" data-mode="${v ? (v.angle ? "after" : mode) : "before"}" style="--ar:${ar}">
         <img class="before" src="/img/raw/${encodeURIComponent(it.source_file)}" alt="" loading="lazy">
@@ -263,6 +268,8 @@ function render(){
       </div>
       <aside>
         <div class="row"><h2><label class="selbox" title="Select for Enhance selected"><input type="checkbox" class="selimg" ${selected.has(it.name) ? "checked" : ""}></label>${esc(it.name)}</h2>${tabs}</div>
+        ${hasChar ? `<div class="row charcard"><label class="showall" style="float:none"><input type="checkbox" class="itemchar" ${it.character_on ? "checked" : ""}> Character</label>
+          ${it.character_on ? `<input class="field itemcharnote" placeholder="Character pose, position, or action..." value="${esc(it.character_note || "")}">` : ""}</div>` : ""}
         <div class="facts">
           <span>raw</span><b>${it.src_size ? it.src_size.join(" × ") : "–"}</b>
           <span>out</span><b>${v && v.out_size ? v.out_size.join(" × ") + (v.model ? " · " + ((S.models[v.model]||{}).label||v.model).split(" ·")[0] : "") + (v.quality ? " · " + v.quality : "") : "–"}</b>
@@ -282,6 +289,15 @@ function render(){
       </aside>`;
     for (const b of art.querySelectorAll(".vseg button")) b.addEventListener("click", () => { art.dataset.sel = b.dataset.i; art.dataset.sig = ""; render(); });
     $(".rewrite", art).addEventListener("click", () => regen(it.name, true));
+    const cc = $(".itemchar", art); if (cc) cc.addEventListener("change", async () => {
+      const on = cc.checked;
+      const noteEl = art.querySelector(".itemcharnote");
+      const note = noteEl ? noteEl.value : (it.character_note || "");
+      await api("/api/item_config", {name: it.name, character_on: on, character_note: note});
+      if (on) charWarn();
+      poll();
+    });
+    const cn = $(".itemcharnote", art); if (cn) cn.addEventListener("input", () => { clearTimeout(art._charNoteTimer); art._charNoteTimer = setTimeout(() => api("/api/item_config", {name: it.name, character_on: true, character_note: cn.value}), 400); });
     const pk = $(".pick", art); if (pk) pk.addEventListener("click", async () => { await api("/api/pick", {name: it.name, file: v.file}); poll(); });
     const dv = $(".delver", art); if (dv) dv.addEventListener("click", async () => { if (!await ask(`Delete ${it.name} ${vlabel(v, sel)}? It moves to enhanced/trash, not the bin.`, "Delete version", "Delete")) return; const r = await api("/api/delete_version", {name: it.name, file: v.file}); if (r.error) { toast(r.error); return; } frames = frames.filter(f => !(f.name === it.name && f.file === v.file)); saveConfig(); art.dataset.sel = Math.max(0, sel - 1); art.dataset.sig = ""; poll(); });
     const ag = $(".angles", art); if (ag) ag.addEventListener("click", async () => {
