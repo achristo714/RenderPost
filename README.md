@@ -16,7 +16,7 @@ Full instructions with screenshots: [docs/RenderPost-Guide.pdf](docs/RenderPost-
 
 1. **Write prompts.** An art director model looks at each render and writes a bespoke enhancement prompt. Cents per image.
 2. **Review.** Every prompt is editable. Style notes shape all of them.
-3. **Enhance.** Pick a model (GPT Image 2, Nano Banana Pro, Nano Banana 2), press Enhance, or Enhance selected. Results are kept as versions; nothing is overwritten.
+3. **Enhance.** Pick a model (GPT Image 2.5 Flare or Sunburst, Nano Banana Pro, Nano Banana 2), press Enhance, or Enhance selected. Results are kept as versions; nothing is overwritten.
 4. **Pick, compare, angle, animate.** Star your picks, save before/after sheets, generate other camera angles, and switch to Video to make clips (H3 Max, Kling 3.0, Seedance 2.5) and stitch reels.
 
 Every spend shows an estimate first and confirms in-app. A running total sits in the header.
@@ -25,7 +25,7 @@ Every spend shows an estimate first and confirms in-app. A running total sits in
 
 ## Models
 
-Built in: GPT Image 2, Nano Banana Pro, Nano Banana 2 for images; H3 Max, Kling 3.0 Pro, Seedance 2.5 for video. Extra models can be added without a rebuild through [`models.json`](models.json) in this repo, which the app reads on launch; the catalog dialog in the app documents the format.
+Built in: GPT Image 2.5 Flare and Sunburst, Nano Banana Pro, Nano Banana 2 for images; H3 Max, Kling 3.0 Pro, Seedance 2.5 for video. Extra models can be added without a rebuild through [`models.json`](models.json) in this repo, which the app reads on launch; the catalog dialog in the app documents the format.
 
 ## Building from source
 
