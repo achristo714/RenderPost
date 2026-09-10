@@ -35,10 +35,11 @@ from pathlib import Path
 from prompts import (
     BASE_BRIEF, MOTION_BRIEF, CHARACTER_BRIEF, CHARACTER_T2I, TAKE_CHARACTER,
     MOTION_CHARACTER, ENERGY, ANGLES_BRIEF, MULTISHOT_BRIEF, TAKE_BRIEF,
+    CHARACTER_AUTO_PLACEMENT, CHARACTER_NOTE_BOTH, CHARACTER_NOTE_CARD_ONLY,
 )
 
 APP_NAME = "RenderPost"
-APP_VERSION = "1.8.2"
+APP_VERSION = "1.8.3"
 # Optional: where the exe checks for a newer release. Point this at your GitHub repo's
 # latest-release API and the header shows an "Update available" link when a newer tag exists.
 # e.g. "https://api.github.com/repos/YOURNAME/renderpost/releases/latest"   ("" = don't check)
@@ -101,7 +102,7 @@ DEFAULT_CONFIG = {"fal_key": "", "model": "gpt-image-2", "quality": "medium", "l
                   "resolution": "2K", "variations": "1", "angles": "6", "style_notes": "", "review_first": True,
                   "video_model": "h3max", "video_res": "480p", "show_all_models": False, "video_duration": "5", "take_duration": "15", "video_audio": True,
                   "crossfade": "0.6", "motion_notes": "", "shots": "1", "video_frames": "[]", "energy": "calm",
-                  "character_on": False, "character_note": "", "character_desc": "", "take_character": False}
+                  "character_note": "", "character_desc": "", "take_character": False}
 
 
 # ---------------------------------------------------------------- config
@@ -117,7 +118,7 @@ def config_dir():
     return d
 
 
-FOLDER_KEYS = ("style_notes", "motion_notes", "video_frames", "character_on", "character_note", "character_desc", "take_character", "spend")
+FOLDER_KEYS = ("style_notes", "motion_notes", "video_frames", "character_note", "character_desc", "take_character", "spend")
 GPT_IMAGE_EST = 0.25            # GPT Image 2 is token priced; this is the working average used for the running total          # these live with the render folder, not the user
 
 
@@ -393,6 +394,18 @@ def with_retry(fn, attempts=3):
             time.sleep(delay); delay *= 2
 
 
+def character_guidance(global_note, card_note):
+    """Combine the project-wide character note with a card's own placement/pose text."""
+    g, c = (global_note or "").strip(), (card_note or "").strip()
+    if g and c:
+        return CHARACTER_NOTE_BOTH.format(**{"global": g, "card": c})
+    if g:
+        return g
+    if c:
+        return CHARACTER_NOTE_CARD_ONLY.format(card=c)
+    return CHARACTER_AUTO_PLACEMENT
+
+
 class Fal:
     def __init__(self, key):
         import fal_client
@@ -526,7 +539,7 @@ class Fal:
     def write_prompt(self, image_url, style_notes, previous=None, character_url=None, character_note=""):
         brief = BASE_BRIEF
         if character_url:
-            brief += "\n\n" + CHARACTER_BRIEF.format(note=("Notes about the person: " + character_note.strip()) if character_note.strip() else "")
+            brief += "\n\n" + CHARACTER_BRIEF.format(note=character_note)
         if style_notes.strip():
             brief += ("\n\nThe client also wants, for every image in this set:\n" + style_notes.strip()
                       + "\nFold these into the prompt. They override the mood choice above.")
@@ -716,6 +729,7 @@ class State:
                     "name": name, "source_file": p.name, "versions": versions,
                     "prompt": draft, "notes_used": m.get("notes_used", ""), "src_size": image_dims(p),
                     "status": "done" if versions else "pending", "step": "", "error": None, "url": None,
+                    "character_on": bool(m.get("character_on", False)), "character_note": m.get("character_note", "") or "",
                 }
                 self.order.append(name)
 
@@ -797,7 +811,7 @@ class State:
             urls = [self.upload_source(src) for src in c["sources"]]
             take = c["kind"] == "take"
             with_char = False
-            if take and cfg.get("take_character") and cfg.get("character_on") and self.character_path():
+            if take and cfg.get("take_character") and self.character_path():
                 urls = urls + [self.character_url()]; with_char = True
             elif not take:
                 src0 = c["sources"][0]; it0 = self.items.get(src0["name"], {})
@@ -858,7 +872,7 @@ class State:
             url = self.upload_source({"name": name, "file": file})
             if cancelled():
                 raise Cancelled()
-            char = self.character_url() if cfg.get("character_on") else None
+            char = self.character_url() if it.get("character_on") else None
             self.set(name, step=f"planning {n} angles")
             prompts = self.fal.write_angles(url, n, cfg.get("style_notes", ""), char)
             dims = image_dims(src_path) or it["src_size"] or [1920, 1080]
@@ -923,7 +937,8 @@ class State:
 
     def save_prompts(self):
         with self.lock:
-            data = {n: {"draft": it["prompt"], "notes_used": it.get("notes_used", ""), "versions": it["versions"]} for n, it in self.items.items()}
+            data = {n: {"draft": it["prompt"], "notes_used": it.get("notes_used", ""), "versions": it["versions"],
+                        "character_on": it.get("character_on", False), "character_note": it.get("character_note", "")} for n, it in self.items.items()}
         (self.out_dir / "prompts.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def snapshot(self):
@@ -1000,11 +1015,12 @@ class State:
                     self.demo_sources[url] = src
             if cancelled():
                 raise Cancelled()
-            char = self.character_url() if cfg.get("character_on") else None
+            char = self.character_url() if it.get("character_on") else None
+            note = character_guidance(cfg.get("character_note", ""), it.get("character_note", "")) if char else ""
             if stage in ("prompt", "full", "revise", "revise_full") and not forced_prompt:
                 revising = stage.startswith("revise") and bool(it["prompt"])
                 self.set(name, step="updating prompt" if revising else "writing prompt")
-                prompt = self.fal.write_prompt(url, cfg["style_notes"], it["prompt"] if revising else None, char, cfg.get("character_note", ""))
+                prompt = self.fal.write_prompt(url, cfg["style_notes"], it["prompt"] if revising else None, char, note)
                 self.set(name, prompt=prompt, notes_used=cfg["style_notes"].strip())
                 self.save_prompts()
             else:
@@ -1352,13 +1368,13 @@ class Handler(BaseHTTPRequestHandler):
                 im.save(STATE.out_dir / "character.png", "PNG")
             except Exception as e:
                 return self._send(400, {"error": f"Couldn't read that image ({e})."})
-            cfg["character_desc"] = ""; cfg["character_on"] = True; save_config(cfg)
+            cfg["character_desc"] = ""; save_config(cfg)
             return self._send(200, {"ok": True})
         if path == "/api/character/clear":
             p = STATE.out_dir / "character.png"
             if p.exists():
                 p.unlink()
-            cfg["character_on"] = False; cfg["character_desc"] = ""; save_config(cfg)
+            cfg["character_desc"] = ""; save_config(cfg)
             return self._send(200, {"ok": True})
         if path == "/api/folder":
             if STATE.active:
@@ -1390,7 +1406,8 @@ class Handler(BaseHTTPRequestHandler):
                 except (TypeError, ValueError):
                     pass
             for k in ("model", "quality", "long_edge", "resolution", "variations", "angles", "style_notes",
-                      "video_model", "video_res", "video_duration", "take_duration", "crossfade", "motion_notes", "shots", "video_frames", "energy"):
+                      "video_model", "video_res", "video_duration", "take_duration", "crossfade", "motion_notes", "shots", "video_frames", "energy",
+                      "character_note"):
                 if k in body:
                     cfg[k] = str(body[k])
             if "video_audio" in body:
@@ -1400,9 +1417,8 @@ class Handler(BaseHTTPRequestHandler):
             if "catalog_url" in body:
                 cfg["catalog_url"] = str(body["catalog_url"]).strip()
                 save_config(cfg); load_catalog()
-            for k in ("character_on", "take_character"):
-                if k in body:
-                    cfg[k] = bool(body[k])
+            if "take_character" in body:
+                cfg["take_character"] = bool(body["take_character"])
             if cfg["model"] not in MODELS:
                 cfg["model"] = "gpt-image-2"
             if "review_first" in body:
@@ -1419,6 +1435,13 @@ class Handler(BaseHTTPRequestHandler):
                 cfg["fal_key"] = key
                 STATE.fal = None
             save_config(cfg)
+            return self._send(200, {"ok": True})
+        if path == "/api/item_config":
+            name = body.get("name")
+            if name not in STATE.items:
+                return self._send(404, {"error": "unknown image"})
+            STATE.set(name, character_on=bool(body.get("character_on")), character_note=str(body.get("character_note") or ""))
+            STATE.save_prompts()
             return self._send(200, {"ok": True})
         if not cfg["fal_key"] and not DEMO:
             return self._send(400, {"error": "Add your fal key first."})
@@ -1443,7 +1466,7 @@ class Handler(BaseHTTPRequestHandler):
                 shutil.move(str(tmp), str(STATE.out_dir / "character.png"))
             except Exception as e:
                 return self._send(500, {"error": friendly(e)})
-            cfg["character_desc"] = desc; cfg["character_on"] = True; save_config(cfg)
+            cfg["character_desc"] = desc; save_config(cfg)
             STATE.add_spend(0.15)
             return self._send(200, {"ok": True})
         if path == "/api/angles":

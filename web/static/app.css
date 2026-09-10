@@ -185,6 +185,8 @@
   .facts{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;align-items:center;font-family:var(--em-font-mono);font-size:11px;color:var(--em-ink-dim)}
   .facts b{color:var(--em-ink);font-weight:500;display:flex;align-items:center;gap:6px}
   .row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:2px}
+  .charcard{justify-content:flex-start}
+  .charcard .itemcharnote{flex:1;min-width:0}
   aside textarea{min-height:150px;max-height:none;font-size:12.5px;field-sizing:content;overflow:hidden}
   .err[hidden]{display:none}
   .err{font-family:var(--em-font-mono);font-size:11px;line-height:1.5;color:var(--em-danger);background:var(--em-bg-inset);border:1px solid var(--em-line);border-radius:var(--em-r-md);padding:10px 12px;word-break:break-word}

@@ -40,9 +40,8 @@
     <div class="charblock" id="charblock">
       <div class="charthumb" id="charthumb"><span class="label">No character</span></div>
       <div class="charbody">
-        <div class="row"><span class="label">Character · off by default</span>
-          <label class="showall" style="float:none"><input type="checkbox" id="charon"> use in enhancements and angles</label></div>
-        <div class="hint">One consistent person across the whole set. Generate one from a description, or upload a person you have the rights to use. Real photos of strangers are a rights problem and trip model filters; generated people are safest.</div>
+        <div class="row"><span class="label">Character · off by default, enable per image below</span></div>
+        <div class="hint">One consistent person across the whole set. Generate one from a description, or upload a person you have the rights to use. Real photos of strangers are a rights problem and trip model filters; generated people are safest. Turn it on for a specific image with the "Character" checkbox on that image's card.</div>
         <div class="charrow">
           <input class="field" id="chardesc" placeholder="Describe a person to generate, e.g. woman in her 30s, dark hair tied back, linen shirt, tailored trousers">
           <button class="btn" id="chargen" type="button">Generate</button>
@@ -200,6 +199,14 @@
 <div class="scrim" id="askmodal" hidden>
   <div class="modal" style="width:420px"><h2 id="asktitle">Confirm</h2><p id="askbody"></p>
     <div class="actions"><button class="btn quiet" id="askno" type="button">Cancel</button><button class="btn solid" id="askyes" type="button">Continue</button></div></div>
+</div>
+<div class="scrim" id="charwarnmodal" hidden>
+  <div class="modal" style="width:420px">
+    <h2>Seedance and characters don't mix</h2>
+    <p>Seedance video models refuse frames with realistic people in them. If you send this image to Seedance later (a clip, a take, or a reel frame), the job may fail once the character is in it.</p>
+    <label class="showall" style="float:none"><input type="checkbox" id="charwarndismiss"> Don't show this again this session</label>
+    <div class="actions"><button class="btn solid" id="charwarnok" type="button">Got it</button></div>
+  </div>
 </div>
 <div class="toasts" id="toasts"></div>
 <div class="hints"><span><b>1 2 3</b>view</span><span><b>J K</b>next · prev</span><span><b>drag</b>wipe</span></div>

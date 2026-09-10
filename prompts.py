@@ -32,6 +32,14 @@ CHARACTER_T2I = ("Full-length reference photograph of one person for use as a co
                  "architectural visualisation: {desc}. Plain light grey studio background, soft even "
                  "light, relaxed natural pose, facing the camera, photoreal, no text, no logos.")
 
+CHARACTER_AUTO_PLACEMENT = (
+    "No placement instructions were given. Study the scene and the reference photo yourself, then "
+    "place the person where a real person would naturally be in this space, doing something natural "
+    "for it, at the right scale and in the room's own light, as unobtrusive architectural entourage."
+)
+CHARACTER_NOTE_BOTH = "{global}. Placement/Pose: {card}"
+CHARACTER_NOTE_CARD_ONLY = "Placement/Pose: {card}"
+
 TAKE_CHARACTER = """The LAST image is a reference of one specific person (@Image {n}). They appear in the take,
 walking through the spaces at a natural pace, seen from behind or in three-quarter view more
 than head-on, with consistent face, hair, build and clothing. Say so explicitly in the prompt."""
