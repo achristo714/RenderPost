@@ -23,7 +23,7 @@ no test suite. The product is `dist\RenderPost.exe`, built by PyInstaller.
 | `.github/workflows/build-exe.yml` | Builds the exe on every push to `main`. If `APP_VERSION` has no tag yet, it also creates the tag and the GitHub Release with `RELEASE_NOTES.md` as the body. |
 | `RELEASE_NOTES.md` | Body of the next release. Rewritten each release. |
 | `CHANGELOG.md` | Running history. Append, do not rewrite. |
-| `docs/` | User guide PDF and README screenshots. |
+| `docs/` | User guide PDF, README screenshots, and `BEHAVIOR_MAP.md` (a functional map of how the essential features actually behave). |
 | `RenderPost.ico`, `RenderPost-orange.ico` | App icons. |
 
 Ignored and never committed: `build/`, `dist/`, `*.spec`, `__pycache__/`, `enhanced/`, loose `*.png`.
@@ -94,6 +94,8 @@ Ignored and never committed: `build/`, `dist/`, `*.spec`, `__pycache__/`, `enhan
 3. If you touched the build line, imports, or file layout: run `build.bat`, launch
    `dist\RenderPost.exe`, and repeat step 2 inside the exe. The exe is what users run.
 4. In the PR description state what you ran. "Compiles" is not verification.
+5. If this PR changes how an essential feature behaves, consider updating the matching section
+   of `docs/BEHAVIOR_MAP.md` (and its "Last verified against" line).
 
 ## Release (automatic once a version bump reaches `main`)
 
