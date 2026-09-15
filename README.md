@@ -44,6 +44,8 @@ To run without building: `python RenderPost.py`. Add `--demo` to click around wi
 
 Everything the app writes lives in `enhanced/` inside your render folder: versions (`name_v01.png`), angles (`name_a01.png`), `picks/`, `compare/`, `video/`, `trash/`, and the prompts. Your key and preferences live in `%APPDATA%\RenderPost`.
 
+For how the features actually work under the hood, see [docs/BEHAVIOR_MAP.md](docs/BEHAVIOR_MAP.md).
+
 ## Credits
 
 Built by [Andy Christoforou](https://www.youtube.com/@andychristoforou) for ArchViz Academy students. Tested by Filip Filyov. UI follows the Ember Mono design system.
