@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.9.0
+- Style notes and Motion notes gain saved phrases: select text and "Add phrase" to save it, then reopen it from a "Saved phrases" button or Shift+Tab in either box and click to insert it at your cursor. Both boxes share one phrase library. Phrases can be deleted from the same list. Stored in a new `%APPDATA%\RenderPost\phrases.json`, separate from other settings and shared across every project. (Filip Filyov)
+
 ## 1.8.5
 - Fix: running spend could undercount when several images finished at the same moment. The project settings file is now written under a lock.
 

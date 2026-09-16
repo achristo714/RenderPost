@@ -209,6 +209,13 @@
   .recent button{text-align:left;font-family:var(--em-font-mono);font-size:11px;color:var(--em-ink);background:var(--em-bg-inset);border:1px solid var(--em-line);border-radius:var(--em-r-sm);padding:8px 10px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .recent button:hover{border-color:var(--em-line-bright);background:var(--em-hover)}
   .recent .none{font-size:12px;color:var(--em-ink-faint)}
+  .phraselist{display:grid;gap:4px;max-height:40vh;overflow:auto}
+  .phraselist .item{display:flex;align-items:stretch;gap:4px}
+  .phraselist .item .text{flex:1;text-align:left;font-family:var(--em-font-mono);font-size:11px;color:var(--em-ink);background:var(--em-bg-inset);border:1px solid var(--em-line);border-radius:var(--em-r-sm);padding:8px 10px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .phraselist .item .text:hover{border-color:var(--em-line-bright);background:var(--em-hover)}
+  .phraselist .item .del{flex:0 0 auto;font-family:var(--em-font-mono);font-size:12px;color:var(--em-ink-faint);background:var(--em-bg-inset);border:1px solid var(--em-line);border-radius:var(--em-r-sm);padding:8px 10px;cursor:pointer}
+  .phraselist .item .del:hover{color:var(--em-danger);border-color:var(--em-line-bright)}
+  .phraselist .none{font-size:12px;color:var(--em-ink-faint)}
   body.dropping::after{content:"Drop renders to add them to this project";position:fixed;inset:12px;border:2px dashed var(--em-accent);border-radius:var(--em-r-xl);background:rgba(19,18,17,.75);display:grid;place-items:center;font-size:16px;color:var(--em-ink);z-index:25;pointer-events:none}
   .toasts{position:fixed;right:14px;bottom:14px;display:grid;gap:8px;z-index:30;max-width:380px}
   .toast{padding:10px 14px;border-radius:var(--em-r-md);background:var(--em-panel);backdrop-filter:var(--em-blur);border:1px solid var(--em-line-strong);box-shadow:var(--em-shadow-panel);font-size:13px;color:var(--em-ink);display:flex;gap:10px;align-items:flex-start;animation:em-pop var(--em-t-pop) var(--em-ease)}

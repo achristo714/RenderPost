@@ -35,6 +35,10 @@
     <div class="f">
       <span class="label">Style notes · used whenever a prompt is written</span>
       <textarea id="notes" rows="2" placeholder="Optional, in plain English. e.g. cooler white balance, dusk lighting, no people, autumn trees. Prompts already written keep their text; press New batch or Rewrite to apply notes to them."></textarea>
+      <div class="row">
+        <span><button class="btn quiet" id="addphrase" type="button">Add phrase</button><button class="btn quiet" id="phrasesbtn" type="button">Saved phrases</button></span>
+        <span class="hint">Select text above and click Add phrase to save it · Shift+Tab in the box opens saved phrases</span>
+      </div>
     </div>
     <div class="morewrap" id="morewrap">
     <div class="charblock" id="charblock">
@@ -103,8 +107,14 @@
           <button data-vmode="clips" aria-pressed="true" title="Each frame becomes its own separate video">Separate videos</button>
           <button data-vmode="take" title="One video that travels through all frames in order · always Seedance · experimental">One video through all frames</button>
         </div></div>
-      <div class="f"><span class="label">Motion notes · used whenever a motion prompt is written</span>
-        <textarea id="mnotes" rows="2" placeholder="Optional. e.g. slow push-ins only, no people, evening ambience, keep it still and calm."></textarea></div>
+      <div class="f">
+        <span class="label">Motion notes · used whenever a motion prompt is written</span>
+        <textarea id="mnotes" rows="2" placeholder="Optional. e.g. slow push-ins only, no people, evening ambience, keep it still and calm."></textarea>
+        <div class="row">
+          <span><button class="btn quiet" id="maddphrase" type="button">Add phrase</button><button class="btn quiet" id="mphrasesbtn" type="button">Saved phrases</button></span>
+          <span class="hint">Select text above and click Add phrase to save it · Shift+Tab in the box opens saved phrases</span>
+        </div>
+      </div>
       <div class="controls">
         <div class="f wide clipsonly"><span class="label">Video model <label class="showall"><input type="checkbox" id="vshowall"> show all</label></span><select id="vmodel"></select><span class="hint" id="vmodelhint"></span></div>
         <div class="f clipsonly"><span class="label">Shots per clip</span><select id="shots"><option value="1">1 · one continuous camera move</option><option value="2">2 · cuts to a second angle</option><option value="3">3 · cuts through three angles</option></select></div>
@@ -194,6 +204,14 @@
     <p>Each folder is its own project: its own versions, notes and video set. Nothing here is lost when you switch.</p>
     <div id="recentlist" class="recent"></div>
     <div class="actions"><button class="btn quiet" id="foldercancel" type="button">Cancel</button><button class="btn solid" id="folderbrowse" type="button">Browse…</button></div>
+  </div>
+</div>
+<div class="scrim" id="phrasemodal" hidden>
+  <div class="modal" style="width:80vw">
+    <h2>Saved phrases</h2>
+    <p>Click a phrase to insert it at your cursor.</p>
+    <div id="phraselist" class="phraselist"></div>
+    <div class="actions"><button class="btn quiet" id="phrasecancel" type="button">Close</button></div>
   </div>
 </div>
 <div class="scrim" id="askmodal" hidden>
