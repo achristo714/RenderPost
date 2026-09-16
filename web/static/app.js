@@ -4,7 +4,7 @@ function ask(body, title="Confirm", yes="Continue"){ return new Promise(res => {
   const done = v => { m.hidden = false; m.hidden = true; $("#askyes").onclick = $("#askno").onclick = null; res(v); }; $("#askyes").onclick = () => done(true); $("#askno").onclick = () => done(false); $("#askyes").focus(); }); }
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const api = (p, body) => fetch(p, body ? {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)} : {}).then(r => r.json());
-let S = null, mode = "wipe", cards = {}, dirtyNotes = false, saveTimer = null, selected = new Set(), imgmode = "detail";
+let S = null, mode = "wipe", cards = {}, dirtyNotes = false, saveTimer = null, selected = new Set(), imgmode = "detail", phrases = [], phraseTarget = "#notes";
 let vmode = "clips", frames = [], clipEls = {}, reelEls = {}, stitchSel = new Set(), view = "images";
 
 function setSaved(t){ $("#saved").innerHTML = t ? `<i class="dot ok"></i>${t}` : ""; }
@@ -52,6 +52,7 @@ function fill(sel, opts, val){ sel.innerHTML = Object.entries(opts).map(([k,v]) 
 
 async function boot(){
   S = await api("/api/state");
+  phrases = (await api("/api/phrases")).phrases || [];
   fill($("#quality"), S.quality_options, S.config.quality);
   fill($("#size"), S.size_options, S.config.long_edge);
   fill($("#resolution"), S.res_options, S.config.resolution);
@@ -114,6 +115,13 @@ async function boot(){
     if (r.pending && S.has_key && $("#review").value !== "1") runAll(false);
   });
   $("#notes").addEventListener("input", () => { saveConfig(); render(); });
+  $("#addphrase").addEventListener("click", () => addPhrase("#notes"));
+  $("#phrasesbtn").addEventListener("click", () => openPhraseModal("#notes"));
+  $("#phrasecancel").addEventListener("click", () => $("#phrasemodal").hidden = true);
+  $("#notes").addEventListener("keydown", e => { if (e.shiftKey && e.key === "Tab") { e.preventDefault(); openPhraseModal("#notes"); } });
+  $("#maddphrase").addEventListener("click", () => addPhrase("#mnotes"));
+  $("#mphrasesbtn").addEventListener("click", () => openPhraseModal("#mnotes"));
+  $("#mnotes").addEventListener("keydown", e => { if (e.shiftKey && e.key === "Tab") { e.preventDefault(); openPhraseModal("#mnotes"); } });
   $("#run").addEventListener("click", () => runAll(false));
   $("#newbatch").addEventListener("click", async () => { if (await ask("Write a fresh prompt for every image? Nothing is enhanced until you press Enhance.", "New batch", "Write prompts")) runAll(true); });
   $("#keybtn").addEventListener("click", () => openKey(true));
@@ -144,6 +152,41 @@ function openFolderModal(){
   for (const b of list.querySelectorAll("button[data-path]")) b.addEventListener("click", async () => { const r = await api("/api/folder", {path: b.dataset.path}); if (r.error) { toast(r.error); return; } $("#foldermodal").hidden = true; reloadProject(); });
   $("#foldermodal").hidden = false;
 }
+function openPhraseModal(taId){
+  phraseTarget = taId || phraseTarget;
+  const list = $("#phraselist");
+  list.innerHTML = phrases.length ? phrases.map(p => `
+    <div class="item">
+      <button type="button" class="text" data-id="${esc(p.id)}">${esc(p.text)}</button>
+      <button type="button" class="del" data-id="${esc(p.id)}" title="Delete phrase">×</button>
+    </div>`).join("") : `<span class="none">No saved phrases yet. Select text and click Add phrase.</span>`;
+  for (const b of list.querySelectorAll(".text")) b.addEventListener("click", () => { insertPhrase(b.dataset.id); $("#phrasemodal").hidden = true; });
+  for (const b of list.querySelectorAll(".del")) b.addEventListener("click", () => deletePhrase(b.dataset.id));
+  $("#phrasemodal").hidden = false;
+}
+function insertPhrase(id){
+  const p = phrases.find(x => x.id === id); if (!p) return;
+  const ta = $(phraseTarget);
+  ta.focus();
+  ta.setRangeText(p.text, ta.selectionStart, ta.selectionEnd, "end");
+  ta.dispatchEvent(new Event("input", {bubbles: true}));
+}
+async function addPhrase(taId){
+  const ta = $(taId);
+  const text = ta.value.slice(ta.selectionStart, ta.selectionEnd).trim();
+  if (!text) { toast("Select some text first.", "bad", 3500); return; }
+  const r = await api("/api/phrases/add", {text});
+  if (r.error) { toast(r.error); return; }
+  phrases = r.phrases || phrases;
+  toast("Phrase saved", "ok", 2500);
+}
+async function deletePhrase(id){
+  const r = await api("/api/phrases/delete", {id});
+  if (r.error) { toast(r.error); return; }
+  phrases = r.phrases || phrases;
+  openPhraseModal();
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#phrasemodal").hidden) $("#phrasemodal").hidden = true; });
 async function waitForFolder(){
   // the picker runs on the desktop; poll until the folder changes or the user cancels (~2 min)
   const before = S.folder; const t0 = Date.now();

@@ -1,6 +1,6 @@
 # Render Post — Behavior Map
 
-> Last verified against: v1.8.5
+> Last verified against: v1.9.0
 
 This is a map of how Render Post actually behaves: what happens when you click something, where
 that gets saved, and what logic decides the result. It is **not** a user guide (that's
@@ -28,6 +28,7 @@ touch.
    - [3.7 Picks & Compare](#37-picks--compare)
    - [3.8 Model catalog & pricing](#38-model-catalog--pricing)
    - [3.9 Settings / config](#39-settings--config)
+   - [3.10 Saved phrases](#310-saved-phrases)
 4. [AI / prompt-brief reference](#4-ai--prompt-brief-reference)
 5. [Demo mode approximations](#5-demo-mode-approximations)
 6. [View / interaction map](#6-view--interaction-map)
@@ -37,7 +38,7 @@ touch.
 
 ## 1. Data model & persistence
 
-Render Post has no database — everything lives in plain files, in four layers with different
+Render Post has no database — everything lives in plain files, in five layers with different
 scopes:
 
 ```mermaid
@@ -46,12 +47,17 @@ flowchart TD
     B["&lt;render folder&gt;/enhanced/renderpost.json<br/>(per-project settings)"] -->|overlaid on top| D
     C["&lt;render folder&gt;/enhanced/prompts.json<br/>(per-image prompts & versions)"] -.->|separate, not merged| E[State.items]
     F["&lt;render folder&gt;/enhanced/video/clips.json<br/>(clips & reels)"] -.->|separate, not merged| G[State.clips]
+    I["%APPDATA%\RenderPost\phrases.json<br/>(global — one per computer)"] -.->|separate, not merged| J[Saved phrases list]
     D --> H[the live config dict, cfg]
 ```
 
 - **Global `%APPDATA%\RenderPost\config.json`** — your fal.ai key, model/quality/resolution
   preferences, recent folders list, the model-catalog URL override, and the spend-alert
   threshold. This is the same for every project you open.
+- **Global `%APPDATA%\RenderPost\phrases.json`** — a flat list of saved phrases (`{id, text}`)
+  shared by both the Style notes and Motion notes boxes, kept as its own sibling file rather than
+  merged into `config.json`. Global like `config.json`, so the same phrase library is available
+  across every project.
 - **Per-folder `enhanced/renderpost.json`** — the handful of settings that are specific to *this*
   render folder: style notes, motion notes, the video frame set, the character note/description,
   the take-character toggle, and the running spend total for this project. `load_config()`
@@ -290,6 +296,32 @@ call for a local fake (see §5) so the whole app can be exercised with no key an
 checks GitHub for a newer release on launch and shows an "update available" link in the header if
 one exists.
 
+### 3.10 Saved phrases
+
+**Trigger:** both the Style notes box (`#notes`, Images tab) and the Motion notes box (`#mnotes`,
+Video tab) have their own "Add phrase"/"Saved phrases" controls and hint text, but share one
+phrase library. Selecting text in either box and clicking "Add phrase" saves it; clicking "Saved
+phrases," or pressing Shift+Tab while that box is focused, opens the saved-phrase list targeted at
+that box; clicking a phrase in that list inserts it at the current cursor position in whichever
+box opened the popup; the "×" next to a phrase deletes it (visible from either box, since the list
+is shared).
+
+**Route → backend:** `GET /api/phrases` lists saved phrases; `POST /api/phrases/add` appends a new
+`{id, text}` entry (`id` is a `uuid4` hex string); `POST /api/phrases/delete` removes one by `id`.
+All three sit ahead of the fal-key guard in `do_POST`/`do_GET`, since phrases never touch fal.ai.
+The frontend tracks which textarea last opened the popup (`phraseTarget` in `app.js`) so "insert"
+lands in the right box; there is no per-box split on the backend, it's a single flat list.
+
+**Persisted:** a flat JSON array of `{id, text}` in the global `%APPDATA%\RenderPost\phrases.json`
+(see §1), shared across every project and across both boxes — not per-folder like style/motion
+notes themselves. Reads/writes are serialized under `PHRASES_FILE_LOCK` the same way
+`renderpost.json` writes are serialized under `FOLDER_FILE_LOCK`.
+
+**UI feedback:** a toast confirms a phrase was saved or an empty selection was rejected; the
+saved-phrase popup re-renders immediately after an add or delete; inserting a phrase runs through
+the same `input`-event pipeline as typing, so it triggers the normal autosave and prompt-length
+recalculation.
+
 ## 4. AI / prompt-brief reference
 
 All AI instructions ("briefs") live in `prompts.py` as plain text constants, assembled by
@@ -369,3 +401,7 @@ than letting a known oddity go unrecorded — a one-line entry here is enough.
   the page at click time) instead of depending on a separate request having already landed; this
   should also be applied to the batch "Enhance all" path, which has the same exposure. Not yet
   implemented.
+- **Saved phrases are intentionally minimal** (by design, v1.9.0). No editing a saved phrase in
+  place (delete and re-add instead), no reordering, no per-project phrase libraries (phrases are
+  global across every folder, unlike style/motion notes), and no dedupe check — saving the same
+  text twice creates two independently-deletable entries.

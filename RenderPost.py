@@ -22,6 +22,7 @@ import os
 import sys
 import json
 import time
+import uuid
 import shutil
 import socket
 import threading
@@ -39,7 +40,7 @@ from prompts import (
 )
 
 APP_NAME = "RenderPost"
-APP_VERSION = "1.8.5"
+APP_VERSION = "1.9.0"
 # Optional: where the exe checks for a newer release. Point this at your GitHub repo's
 # latest-release API and the header shows an "Update available" link when a newer tag exists.
 # e.g. "https://api.github.com/repos/YOURNAME/renderpost/releases/latest"   ("" = don't check)
@@ -121,6 +122,7 @@ def config_dir():
 
 
 FOLDER_FILE_LOCK = threading.Lock()   # renderpost.json is read-modify-written from worker threads and the UI; serialize it
+PHRASES_FILE_LOCK = threading.Lock()   # phrases.json is read-modify-written from the UI; serialize it
 FOLDER_KEYS = ("style_notes", "motion_notes", "video_frames", "character_note", "character_desc", "take_character", "spend")
 LEGACY_MODELS = {"gpt-image-2": "gpt-image-2.5-flare"}     # saved config ids from older builds -> current id
 # GPT Image 2.5 is token priced. Estimate per image by quality and output long edge, from fal's published
@@ -174,6 +176,21 @@ def save_config(cfg):
                     pass
             keep.update({k: cfg.get(k, "") for k in FOLDER_KEYS if k != "spend"})
             fp.write_text(json.dumps(keep, indent=2), encoding="utf-8")
+
+
+def load_phrases():
+    p = config_dir() / "phrases.json"
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return []
+
+
+def save_phrases(phrases):
+    with PHRASES_FILE_LOCK:
+        (config_dir() / "phrases.json").write_text(json.dumps(phrases, indent=2), encoding="utf-8")
 
 
 # ---------------------------------------------------------------- folder
@@ -1208,6 +1225,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             return self.wfile.write(data)
+        if path == "/api/phrases":
+            return self._send(200, {"phrases": load_phrases()})
         self._send(404, "not found", "text/plain")
 
     def do_POST(self):
@@ -1459,6 +1478,22 @@ class Handler(BaseHTTPRequestHandler):
             STATE.set(name, character_on=bool(body.get("character_on")), character_note=str(body.get("character_note") or ""))
             STATE.save_prompts()
             return self._send(200, {"ok": True})
+        if path == "/api/phrases/add":
+            text = str(body.get("text") or "").strip()
+            if not text:
+                return self._send(400, {"error": "Nothing selected to save."})
+            phrases = load_phrases()
+            phrases.append({"id": uuid.uuid4().hex, "text": text})
+            save_phrases(phrases)
+            return self._send(200, {"ok": True, "phrases": phrases})
+        if path == "/api/phrases/delete":
+            pid = body.get("id")
+            phrases = load_phrases()
+            if not any(p["id"] == pid for p in phrases):
+                return self._send(404, {"error": "unknown phrase"})
+            phrases = [p for p in phrases if p["id"] != pid]
+            save_phrases(phrases)
+            return self._send(200, {"ok": True, "phrases": phrases})
         if not cfg["fal_key"] and not DEMO:
             return self._send(400, {"error": "Add your fal key first."})
         if STATE.fal is None:
