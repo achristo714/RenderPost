@@ -54,9 +54,10 @@ flowchart TD
 - **Global `%APPDATA%\RenderPost\config.json`** — your fal.ai key, model/quality/resolution
   preferences, recent folders list, the model-catalog URL override, and the spend-alert
   threshold. This is the same for every project you open.
-- **Global `%APPDATA%\RenderPost\phrases.json`** — a flat list of saved Style-notes phrases
-  (`{id, text}`), kept as its own sibling file rather than merged into `config.json`. Global like
-  `config.json`, so the same phrase library is available across every project.
+- **Global `%APPDATA%\RenderPost\phrases.json`** — a flat list of saved phrases (`{id, text}`)
+  shared by both the Style notes and Motion notes boxes, kept as its own sibling file rather than
+  merged into `config.json`. Global like `config.json`, so the same phrase library is available
+  across every project.
 - **Per-folder `enhanced/renderpost.json`** — the handful of settings that are specific to *this*
   render folder: style notes, motion notes, the video frame set, the character note/description,
   the take-character toggle, and the running spend total for this project. `load_config()`
