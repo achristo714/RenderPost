@@ -8,7 +8,7 @@ if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 set ICON=
 if exist RenderPost.ico (set ICON=--icon RenderPost.ico) else (echo No RenderPost.ico here, building with the default icon.)
-python -m PyInstaller --onefile --noconsole --name RenderPost --collect-all fal_client --collect-all httpx --collect-all imageio_ffmpeg --add-data "web;web" %ICON% RenderPost.py
+python -m PyInstaller --onefile --noconsole --name RenderPost --collect-all fal_client --collect-all httpx --collect-all imageio_ffmpeg --collect-all mcp --add-data "web;web" %ICON% RenderPost.py
 if errorlevel 1 (echo Build failed. & pause & exit /b 1)
 echo.
 echo Done: dist\RenderPost.exe

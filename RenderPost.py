@@ -13,7 +13,7 @@ Demo mode (no API calls, fakes the enhancement so you can test the UI):
 
 Build the single .exe (once, on Windows, or via the GitHub Actions workflow):
     pip install -r requirements.txt
-    python -m PyInstaller --onefile --noconsole --name RenderPost --collect-all fal_client --collect-all httpx --collect-all imageio_ffmpeg --add-data "web;web" --icon RenderPost.ico RenderPost.py
+    python -m PyInstaller --onefile --noconsole --name RenderPost --collect-all fal_client --collect-all httpx --collect-all imageio_ffmpeg --collect-all mcp --add-data "web;web" --icon RenderPost.ico RenderPost.py
     -> dist\\RenderPost.exe   (no Python, no command window; log in %APPDATA%\\RenderPost\\log.txt)
 """
 
@@ -21,8 +21,10 @@ import io
 import os
 import sys
 import json
+import math
 import time
 import uuid
+import asyncio
 import base64
 import hashlib
 import secrets
@@ -94,22 +96,41 @@ MODEL_CATALOG_URL = "https://raw.githubusercontent.com/achristo714/RenderPost/ma
 # stay on fal. Empty by default on purpose: this app doesn't favor one aggregator. A provider is
 # added by merging one into the model catalog's "providers" section (see MODEL_CATALOG_URL above,
 # no rebuild needed) or pasted as a one-off "custom provider" in the app's Providers settings.
-# Each entry is declarative, not code — one generic engine (AggregatorProvider) reads any of them:
-#   {"label": "Vendor name",
-#    "transport": "rest_async" | "rest_sync",   # async = submit, then poll until done; sync = submit gets the result directly
-#    "base_url": "https://api.vendor.com",
+# Each entry is declarative, not code — one generic engine (AggregatorProvider) reads any of them.
+# Two transport shapes:
+#
+#   REST — "transport": "rest_async" (submit, then poll until done) or "rest_sync" (submit returns
+#   the result directly). Args available to every {placeholder}: prompt, image_url, image_urls,
+#   width, height, aspect_ratio, resolution (image); prompt, image_url, image_urls, duration,
+#   resolution (video).
+#   {"label": "Vendor name", "transport": "rest_async", "base_url": "https://api.vendor.com",
 #    "auth": {"type": "header_template", "header": "Authorization", "template": "Key {key_id}:{key_secret}",
-#              "fields": ["key_id", "key_secret"]},           # or {"type": "bearer", "fields": ["access_token"]}
+#              "fields": ["key_id", "key_secret"]},        # or {"type": "bearer"/"oauth2", "fields": [...]}
 #    "operations": {
 #      "image": {"submit": {"method": "POST", "path": "/models/x/edit", "body": {"prompt": "{prompt}", "image_url": "{image_url}"}},
 #                 "poll": {"path": "/requests/{request_id}/status", "id_field": "id",
 #                           "status_field": "status", "done_value": "completed", "result_field": "result_url"}},
-#      "video": {...same shape, "submit.body" can use {image_urls}/{duration}/{resolution}...}
-#    },
-#    "price": {"image": 0.05, "video": {"480p": 0.05}}}       # same shape MODELS/VIDEO_MODELS price/mult already use
+#      "video": {...same shape...}},
+#    "price": {"image": 0.05, "video": {"480p": 0.05}}}     # same shape MODELS/VIDEO_MODELS price/mult already use
+#
+#   MCP — "transport": "mcp_http", a remote (not local/stdio) Streamable HTTP MCP server, e.g. one
+#   that lets automation spend the same subscription credits as a vendor's own web app instead of a
+#   separate paid API. "operations.<image|video>.steps" is an ordered list of MCP tool calls; each
+#   step's extracted "output_field" can be stashed as "output_as" for later steps to reference, and
+#   the LAST step's extraction is the operation's result:
+#   {"label": "Vendor name", "transport": "mcp_http", "mcp_url": "https://mcp.vendor.com/mcp",
+#    "auth": {"type": "oauth2", "authorize_url": "...", "token_url": "...", "client_id": "...", "scope": "..."},
+#    "operations": {"image": {"steps": [
+#      {"tool": "import_url", "arguments": {"url": "{image_url}"}, "output_as": "media_id", "output_field": "media_id"},
+#      {"tool": "generate_image", "arguments": {"prompt": "{prompt}", "media_id": "{media_id}"}, "output_as": "job_id", "output_field": "id"},
+#      {"tool": "wait_for_job", "arguments": {"id": "{job_id}"}, "output_field": "result_url"}
+#    ]}}}
+#   Needs the `mcp` pip package (requirements.txt, --collect-all mcp in build.bat/workflow),
+#   imported lazily so the app runs fine without it when no mcp_http provider is connected.
+#
 # A model or video-model entry opts into a provider with "provider": "<id>" (default, if absent: "fal").
 PROVIDERS = {}
-PROVIDER_TRANSPORTS = ("rest_async", "rest_sync")
+PROVIDER_TRANSPORTS = ("rest_async", "rest_sync", "mcp_http")
 VIDEO_DURATIONS = {"4": "4 s", "5": "5 s", "6": "6 s", "8": "8 s", "10": "10 s", "12": "12 s", "15": "15 s"}
 TAKE_DURATIONS = {"8": "8 s", "10": "10 s", "15": "15 s", "20": "20 s", "30": "30 s"}
 MUSIC_EXT = {".mp3", ".wav", ".m4a", ".aac"}
@@ -751,11 +772,53 @@ def _fill_template(node, args):
 
 
 def _dig(obj, path):
-    """Read a dotted field path (e.g. "video.url") out of a parsed JSON response."""
+    """Read a dotted field path out of a parsed JSON response — "video.url" for a nested object,
+    or "images.0.url" where a segment is a numeric list index (e.g. Higgsfield's image results
+    come back as an "images" array of {"url": ...} objects, not a single object)."""
     cur = obj
     for part in str(path).split("."):
-        cur = cur.get(part) if isinstance(cur, dict) else None
+        if isinstance(cur, dict):
+            cur = cur.get(part)
+        elif isinstance(cur, list) and part.lstrip("-").isdigit():
+            i = int(part)
+            cur = cur[i] if -len(cur) <= i < len(cur) else None
+        else:
+            return None
     return cur
+
+
+async def _mcp_run_steps(url, headers, steps, args, cancelled):
+    """Run an ordered sequence of MCP tool calls against a remote (Streamable HTTP) MCP server —
+    e.g. upload an image, generate, wait for the job, fetch the result — accumulating each step's
+    extracted output into `args` so later steps can reference it. Returns the last step's
+    extracted value. Needs the `mcp` package; imported lazily here so the app runs fine without it
+    when no mcp_http provider is connected (same convention as Fal's lazy `import fal_client`)."""
+    import mcp
+    from mcp.client.streamable_http import streamablehttp_client
+    out = None
+    async with streamablehttp_client(url, headers=headers) as (read, write, _get_session_id):
+        async with mcp.ClientSession(read, write) as session:
+            await session.initialize()
+            for step in steps:
+                if cancelled():
+                    raise Cancelled()
+                tool_args = _fill_template(step.get("arguments", {}), args)
+                result = await session.call_tool(step["tool"], tool_args)
+                if getattr(result, "isError", False):
+                    text = "".join(getattr(c, "text", "") for c in (result.content or []))
+                    raise RuntimeError(f"MCP tool \"{step['tool']}\" failed: {text[:300] or 'no details'}")
+                data = result.structuredContent
+                if data is None:
+                    text = next((c.text for c in (result.content or []) if getattr(c, "text", None)), None)
+                    try:
+                        data = json.loads(text) if text else {}
+                    except (TypeError, ValueError):
+                        data = {"text": text}
+                field = step.get("output_field")
+                out = _dig(data, field) if field else data
+                if step.get("output_as"):
+                    args[step["output_as"]] = out
+    return out
 
 
 class AggregatorProvider:
@@ -822,6 +885,28 @@ class AggregatorProvider:
         op_def = (self.defn.get("operations") or {}).get(op)
         if not op_def:
             raise RuntimeError(f"{self.label()} has no {op} operation configured.")
+        if self.defn.get("transport") == "mcp_http":
+            return self._call_mcp(op_def, args, cancelled)
+        return self._call_rest(op_def, args, cancelled)
+
+    def _call_mcp(self, op_def, args, cancelled, _retried=False):
+        steps = op_def.get("steps")
+        if not steps:
+            raise RuntimeError(f"{self.label()} has no steps configured for this operation.")
+        try:
+            out = asyncio.run(_mcp_run_steps(self.defn["mcp_url"], self._headers(), steps, dict(args), cancelled))
+        except Cancelled:
+            raise
+        except Exception as e:
+            msg = str(e)
+            if ("401" in msg or "unauthorized" in msg.lower()) and not _retried and self._refresh_oauth():
+                return self._call_mcp(op_def, args, cancelled, _retried=True)
+            raise
+        if not out:
+            raise RuntimeError(f"{self.label()} finished but returned no result.")
+        return out
+
+    def _call_rest(self, op_def, args, cancelled=lambda: False):
         submit = op_def["submit"]
         body = _fill_template(submit.get("body", {}), args)
         url = self.defn["base_url"].rstrip("/") + submit["path"].format(**args)
@@ -852,8 +937,11 @@ class AggregatorProvider:
             time.sleep(2.0)
 
     def edit(self, image_url, prompt, cfg, src_dims, cancelled=lambda: False, extra_urls=()):
+        w, h = src_dims
+        g = math.gcd(int(w), int(h)) or 1
         args = {"prompt": prompt, "image_url": image_url, "image_urls": [image_url] + list(extra_urls),
-                 "width": src_dims[0], "height": src_dims[1]}
+                 "width": w, "height": h, "aspect_ratio": f"{int(w)//g}:{int(h)//g}",
+                 "resolution": str(cfg.get("resolution", "")).lower()}
         return [self._call("image", args, cancelled)]
 
     def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False):
@@ -1735,8 +1823,8 @@ class Handler(BaseHTTPRequestHandler):
             defn = body.get("definition")
             if not pid or not isinstance(defn, dict):
                 return self._send(400, {"error": "Need a provider id and a definition object."})
-            if defn.get("transport") not in PROVIDER_TRANSPORTS or not defn.get("base_url") or not defn.get("operations"):
-                return self._send(400, {"error": "Definition needs transport (rest_async/rest_sync), base_url and operations."})
+            if not _provider_defn_valid(defn):
+                return self._send(400, {"error": "Definition needs a transport (rest_async/rest_sync/mcp_http), operations, and base_url (or mcp_url for mcp_http)."})
             cfg.setdefault("custom_providers", {})[pid] = defn
             save_config(cfg)
             _merge_providers({pid: defn})
@@ -1962,9 +2050,15 @@ PORT = None                     # set once main() binds the server; used to buil
 OAUTH_PENDING = {}              # provider id -> {"verifier": ..., "state": ...} for an in-flight one-time connect
 
 
+def _provider_defn_valid(v):
+    if not (isinstance(v, dict) and v.get("transport") in PROVIDER_TRANSPORTS and v.get("operations")):
+        return False
+    return bool(v.get("mcp_url")) if v["transport"] == "mcp_http" else bool(v.get("base_url"))
+
+
 def _merge_providers(d):
     for k, v in (d or {}).items():
-        if isinstance(v, dict) and v.get("transport") in PROVIDER_TRANSPORTS and v.get("base_url") and v.get("operations"):
+        if _provider_defn_valid(v):
             PROVIDERS[k] = {**PROVIDERS.get(k, {}), **v}
 
 

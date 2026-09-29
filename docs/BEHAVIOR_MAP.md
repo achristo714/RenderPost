@@ -338,16 +338,30 @@ dropdown *is* the switch, exactly like picking GPT Image vs. Nano Banana today. 
 provider-backed models show a `· ProviderLabel` suffix in the dropdown.
 
 **Providers are declarative, not code.** `PROVIDERS` (empty by default — the app favors no
-aggregator) holds connector definitions: transport (`rest_async` = submit then poll until done,
-matching the exact shape `Fal.edit()`/`Fal.video()` already use against fal.ai; `rest_sync` =
-submit returns the result directly), `base_url`, an `auth` block (`header_template` for an
-API-key style header, or `oauth2` for a one-time-consent flow), and per-operation `submit`/`poll`
-templates. One generic engine, `AggregatorProvider`, reads any conforming definition — adding a
-new aggregator (or fixing one whose API changed) never needs a rebuild. Providers arrive the same
-way extra models do: merged from the model catalog's `providers` section (same `catalog_url`,
-see §3.8), or pasted as a one-off "custom provider" in Connect providers, stored in
-`config.json`'s `custom_providers` and merged in regardless of whether the remote catalog fetch
-succeeds.
+aggregator) holds connector definitions. One generic engine, `AggregatorProvider`, reads any
+conforming definition and dispatches on its `transport` — adding a new aggregator (or fixing one
+whose API changed) never needs a rebuild. Providers arrive the same way extra models do: merged
+from the model catalog's `providers` section (same `catalog_url`, see §3.8), or pasted as a
+one-off "custom provider" in Connect providers, stored in `config.json`'s `custom_providers` and
+merged in regardless of whether the remote catalog fetch succeeds. Two transport shapes:
+
+- **`rest_async`/`rest_sync`** — plain HTTP, `base_url` + per-operation `submit`/`poll` templates,
+  matching the exact submit-then-poll shape `Fal.edit()`/`Fal.video()` already use against fal.ai.
+- **`mcp_http`** — a *remote* (not local/stdio) Streamable HTTP MCP server, `mcp_url` + a
+  per-operation `steps` list of MCP tool calls, each threading its extracted output into later
+  steps' arguments. This exists specifically because some aggregators bill their plain REST API
+  as a separate paid product from their subscription, while their MCP surface draws from the same
+  subscription credit pool as their own web app (confirmed for Higgsfield: `api.higgsfield.ai` is
+  pay-as-you-go regardless of subscription; `mcp.higgsfield.ai/mcp` shares the subscription's
+  credit pool) — `mcp_http` is the only transport here that can actually spend a subscription
+  instead of a separate balance. Needs the `mcp` pip package (`requirements.txt`, `--collect-all
+  mcp` in `build.bat`/the workflow), imported lazily inside `_mcp_run_steps()` so the app still
+  runs with no `mcp_http` provider connected and the package absent — same convention as `Fal`'s
+  lazy `import fal_client`.
+
+Both transports share the same `auth` block shape (`header_template` for a REST API-key style
+header, `bearer` for a pre-obtained static token, or `oauth2` for a one-time-consent flow — an
+`oauth2` provider works the same way under either transport, see Connecting below).
 
 **Connecting:** the "Connect providers" button (next to Change key) lists every known provider
 with its connection status. An API-key provider gets a small form (fields named by the provider's
