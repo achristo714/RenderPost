@@ -1,0 +1,67 @@
+{
+  "_readme": "A verified, working Higgsfield provider definition for RenderPost's aggregator framework (see docs/BEHAVIOR_MAP.md §3.11 and the 'Connect providers' settings panel). Not built into the app by default — paste this into 'Add a custom provider' (id: higgsfield), or merge it into a hosted model catalog's 'providers' section. Every endpoint, field name and response shape here was confirmed live against the real Higgsfield API on 2026-09-29 (Dynamic Client Registration, a real image edit, and a real image-to-video generation — not guessed from documentation). Uses mcp_http so generation draws on an existing Higgsfield subscription's credit pool, not a separate paid API balance (api.higgsfield.ai is billed separately from any subscription; mcp.higgsfield.ai/mcp is not).",
+  "id": "higgsfield",
+  "definition": {
+    "label": "Higgsfield",
+    "transport": "mcp_http",
+    "mcp_url": "https://mcp.higgsfield.ai/mcp",
+    "auth": {
+      "type": "oauth2",
+      "authorize_url": "https://clerk.higgsfield.ai/oauth/authorize",
+      "token_url": "https://clerk.higgsfield.ai/oauth/token",
+      "registration_endpoint": "https://clerk.higgsfield.ai/oauth/register",
+      "scope": "openid email offline_access",
+      "fields": ["access_token", "refresh_token"]
+    },
+    "operations": {
+      "image": {
+        "steps": [
+          {"tool": "media_import_url", "arguments": {"url": "{image_url}", "type": "image"},
+           "output_as": "media_id", "output_field": "media_id"},
+          {"tool": "generate_image_batch",
+           "arguments": {"requests": [{"index": 0, "params": {
+             "model": "gpt_image_2_5", "variant": "flare", "quality": "medium",
+             "resolution": "{resolution}", "aspect_ratio": "{aspect_ratio}", "prompt": "{prompt}",
+             "medias": [{"value": "{media_id}", "role": "image_references"}], "use_unlim": false}}]},
+           "output_as": "job_id", "output_field": "jobs.0.job_id"},
+          {"tool": "jobs_wait", "poll": true, "poll_done_field": "all_terminal",
+           "poll_delay_field": "poll_after_seconds", "poll_delay": 5,
+           "arguments": {"jobs": [{"index": 0, "job_id": "{job_id}"}], "timeout_seconds": 15},
+           "output_field": "jobs.0.result_url"}
+        ]
+      },
+      "video": {
+        "steps": [
+          {"tool": "media_import_url", "arguments": {"url": "{image_url}", "type": "image"},
+           "output_as": "media_id", "output_field": "media_id"},
+          {"tool": "generate_video_batch",
+           "arguments": {"requests": [{"index": 0, "params": {
+             "model": "seedance_2_5", "mode": "omni_reference", "duration": "{duration}",
+             "resolution": "{resolution}", "aspect_ratio": "16:9", "generate_audio": false,
+             "prompt": "{prompt}", "medias": [{"value": "{media_id}", "role": "start_image"}], "use_unlim": false}}]},
+           "output_as": "job_id", "output_field": "jobs.0.job_id"},
+          {"tool": "jobs_wait", "poll": true, "poll_done_field": "all_terminal",
+           "poll_delay_field": "poll_after_seconds", "poll_delay": 5,
+           "arguments": {"jobs": [{"index": 0, "job_id": "{job_id}"}], "timeout_seconds": 15},
+           "output_field": "jobs.0.result_url"}
+        ]
+      }
+    },
+    "price": {"image": 0.03, "video": {"480p": 0.35, "720p": 1.05}}
+  },
+  "verification_notes": {
+    "verified_2026-09-29": [
+      "Dynamic Client Registration against https://clerk.higgsfield.ai/oauth/register — requires a User-Agent header or the request gets a 403",
+      "media_import_url response shape: {media_id, type, content_type, source_url}",
+      "generate_image_batch submit response: {jobs: [{index, job_id, status}], submitted_count, failed_count} — note job_id is nested under jobs[], not a top-level id",
+      "jobs_wait response once terminal: {jobs: [{..., status: \"completed\", result_url: \"...\"}], all_terminal: true} — result_url sits directly on the job for both image and video, no separate show_generation_by_ids call needed for a headless pipeline",
+      "gpt_image_2_5's medias role is exactly \"image_references\"; seedance_2_5's image-to-video role is \"start_image\" with mode \"omni_reference\" — these differ per model, always confirm with models_explore before assuming a role name",
+      "gpt_image_2_5 cost: 1 credit at medium/2k (~$0.03 on an Ultimate plan). seedance_2_5 cost: 35 credits at 5s/720p (~$1.05), scale roughly linearly with duration/resolution — re-check with get_cost before trusting these numbers on another plan tier"
+    ],
+    "not_verified": [
+      "Whether client_id from Dynamic Client Registration needs any cleanup/expiry on Higgsfield's side after repeated connects — each connect registers a fresh client",
+      "Exact video price at other resolutions/durations — only 480p/5s and a 720p/5s cost preflight were checked",
+      "Behavior when a generation is refused (NSFW filter, content policy) — not exercised in this verification pass"
+    ]
+  }
+}

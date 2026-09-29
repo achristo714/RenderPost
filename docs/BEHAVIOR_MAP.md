@@ -395,6 +395,12 @@ a provider-backed catalog entry just declares its own price like any fal one doe
 **Demo mode:** `DemoAggregator` mirrors `DemoFal`'s fakes (it delegates straight to a `DemoFal`
 instance) so a provider-backed model can be exercised in `--demo` mode without credentials.
 
+**Worked reference:** `docs/provider-example-higgsfield.json` is a complete `mcp_http` provider
+definition for Higgsfield (image edit + image-to-video), every field verified live against the
+real API on 2026-09-29 — not guessed from documentation. Not built into the app; paste it into
+Connect providers → Add a custom provider, or merge it into a hosted catalog. Useful both as a
+working provider and as a template for writing a new one.
+
 ## 4. AI / prompt-brief reference
 
 All AI instructions ("briefs") live in `prompts.py` as plain text constants, assembled by
