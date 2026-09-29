@@ -787,12 +787,34 @@ def _dig(obj, path):
     return cur
 
 
+async def _mcp_call_once(session, step, args):
+    tool_args = _fill_template(step.get("arguments", {}), args)
+    result = await session.call_tool(step["tool"], tool_args)
+    if getattr(result, "isError", False):
+        text = "".join(getattr(c, "text", "") for c in (result.content or []))
+        raise RuntimeError(f"MCP tool \"{step['tool']}\" failed: {text[:300] or 'no details'}")
+    data = result.structuredContent
+    if data is None:
+        text = next((c.text for c in (result.content or []) if getattr(c, "text", None)), None)
+        try:
+            data = json.loads(text) if text else {}
+        except (TypeError, ValueError):
+            data = {"text": text}
+    return data
+
+
 async def _mcp_run_steps(url, headers, steps, args, cancelled):
     """Run an ordered sequence of MCP tool calls against a remote (Streamable HTTP) MCP server —
     e.g. upload an image, generate, wait for the job, fetch the result — accumulating each step's
     extracted output into `args` so later steps can reference it. Returns the last step's
     extracted value. Needs the `mcp` package; imported lazily here so the app runs fine without it
-    when no mcp_http provider is connected (same convention as Fal's lazy `import fal_client`)."""
+    when no mcp_http provider is connected (same convention as Fal's lazy `import fal_client`).
+
+    A step with "poll": true (e.g. a long-poll status/wait tool like Higgsfield's jobs_wait, which
+    only blocks up to ~15s per call and expects to be called again until done) repeats the SAME
+    tool call until "poll_done_field" reads "poll_done_value" (default: true), sleeping between
+    attempts — for however long the response's own "poll_delay_field" says to wait (falling back to
+    a fixed few seconds), up to "poll_max_attempts" (default 60) before giving up."""
     import mcp
     from mcp.client.streamable_http import streamablehttp_client
     out = None
@@ -800,20 +822,22 @@ async def _mcp_run_steps(url, headers, steps, args, cancelled):
         async with mcp.ClientSession(read, write) as session:
             await session.initialize()
             for step in steps:
-                if cancelled():
-                    raise Cancelled()
-                tool_args = _fill_template(step.get("arguments", {}), args)
-                result = await session.call_tool(step["tool"], tool_args)
-                if getattr(result, "isError", False):
-                    text = "".join(getattr(c, "text", "") for c in (result.content or []))
-                    raise RuntimeError(f"MCP tool \"{step['tool']}\" failed: {text[:300] or 'no details'}")
-                data = result.structuredContent
-                if data is None:
-                    text = next((c.text for c in (result.content or []) if getattr(c, "text", None)), None)
-                    try:
-                        data = json.loads(text) if text else {}
-                    except (TypeError, ValueError):
-                        data = {"text": text}
+                if step.get("poll"):
+                    done_field, done_value = step.get("poll_done_field", "done"), step.get("poll_done_value", True)
+                    for _attempt in range(step.get("poll_max_attempts", 60)):
+                        if cancelled():
+                            raise Cancelled()
+                        data = await _mcp_call_once(session, step, args)
+                        if _dig(data, done_field) == done_value:
+                            break
+                        delay = _dig(data, step.get("poll_delay_field", "")) or step.get("poll_delay", 3)
+                        await asyncio.sleep(float(delay))
+                    else:
+                        raise RuntimeError(f"MCP tool \"{step['tool']}\" never reported done after {step.get('poll_max_attempts', 60)} attempts.")
+                else:
+                    if cancelled():
+                        raise Cancelled()
+                    data = await _mcp_call_once(session, step, args)
                 field = step.get("output_field")
                 out = _dig(data, field) if field else data
                 if step.get("output_as"):
