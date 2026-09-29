@@ -81,6 +81,7 @@
         <span class="saved" id="stale" hidden></span>
         <span class="saved" id="saved"></span>
         <button class="btn quiet" id="exportimg" type="button" hidden title="Save every image prompt with its version file and the fal-hosted raw URL to enhanced/prompts-export.json">Export prompts</button>
+        <button class="btn quiet" id="providersbtn" type="button" title="Connect a third-party aggregator to use for image/video generation instead of fal, per model">Connect providers</button>
         <button class="btn quiet" id="keybtn" type="button">Change key</button>
         <button class="btn" id="run" type="button">Write prompts</button>
         <button class="btn" id="newbatch" type="button" title="Write a fresh prompt for every image using the current style notes">New batch</button>
@@ -186,16 +187,48 @@
   "video": {
     "my-video": {
       "label": "My Video · Vendor",
-      "i2v": "vendor/my-video/image-to-video",   // must accept prompt, image_url, duration, resolution
+      "i2v": "vendor/my-video/image-to-video",   // must accept prompt, image_url, duration, resolution — omit if using "provider" instead
       "recommended": false,
       "hint": "what it's good at · price",
       "res": {"480p": "480p", "720p": "720p"},   // omit if the model has no resolution setting
       "min_duration": 5,
       "price": {"480p": 0.05, "720p": 0.08}      // per second, keyed by resolution, or {"audio": x, "silent": y}
     }
+  },
+  "providers": {                                 // aggregators for image/video generation only — see Connect providers
+    "my-vendor": {
+      "label": "My Vendor",
+      "transport": "rest_async",                 // or "rest_sync" if submit returns the result directly, no polling
+      "base_url": "https://api.myvendor.com",
+      "auth": {"type": "header_template", "header": "Authorization", "template": "Key {key_id}:{key_secret}", "fields": ["key_id", "key_secret"]},
+      "operations": {
+        "image": {"submit": {"method": "POST", "path": "/edit", "body": {"prompt": "{prompt}", "image_url": "{image_url}"}},
+                   "poll": {"path": "/requests/{request_id}/status", "id_field": "id", "status_field": "status", "done_value": "completed", "result_field": "result_url"}},
+        "video": {"submit": {"method": "POST", "path": "/i2v", "body": {"prompt": "{prompt}", "image_url": "{image_url}", "duration": "{duration}"}},
+                   "poll": {"path": "/requests/{request_id}/status", "id_field": "id", "status_field": "status", "done_value": "completed", "result_field": "result_url"}}
+      },
+      "price": {"image": 0.05}
+    }
   }
-}</pre></details>
+}</pre>
+    <p class="hint">A model opts into a provider with <span class="mono">"provider": "my-vendor"</span> (leave it off for fal, the default). Then it only shows up once that provider is connected below.</p>
+    </details>
     <div class="actions"><button class="btn quiet" id="catalogcancel" type="button">Cancel</button><button class="btn solid" id="catalogsave" type="button">Save and reload</button></div>
+  </div>
+</div>
+<div class="scrim" id="providersmodal" hidden>
+  <div class="modal" style="width:560px">
+    <h2>Connect providers</h2>
+    <p>Image and video <b>generation</b> can be sent to a third-party aggregator instead of fal, per model — pick which in the Model / Video model dropdowns once a provider below is connected. Writing prompts and reading images always stays on fal. Providers come from the model catalog (no rebuild needed) or are added below.</p>
+    <div id="providerlist" class="providerlist"></div>
+    <details><summary class="label" style="cursor:pointer">Add a custom provider</summary>
+      <p class="hint">Paste one provider's definition as JSON. It's saved on this computer only.</p>
+      <input class="field" id="customproviderid" placeholder="id, e.g. higgsfield" spellcheck="false">
+      <textarea class="field mono" id="customproviderjson" rows="8" spellcheck="false" placeholder='{"label": "...", "transport": "rest_async", "base_url": "https://...", "auth": {...}, "operations": {"image": {...}, "video": {...}}}'></textarea>
+      <div class="err" id="customprovidererr" hidden></div>
+      <div class="actions"><button class="btn solid" id="customprovidersave" type="button">Save provider</button></div>
+    </details>
+    <div class="actions"><button class="btn quiet" id="providerscancel" type="button">Close</button></div>
   </div>
 </div>
 <div class="scrim" id="foldermodal" hidden>

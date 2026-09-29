@@ -216,6 +216,16 @@
   .phraselist .item .del{flex:0 0 auto;font-family:var(--em-font-mono);font-size:12px;color:var(--em-ink-faint);background:var(--em-bg-inset);border:1px solid var(--em-line);border-radius:var(--em-r-sm);padding:8px 10px;cursor:pointer}
   .phraselist .item .del:hover{color:var(--em-danger);border-color:var(--em-line-bright)}
   .phraselist .none{font-size:12px;color:var(--em-ink-faint)}
+  .mono{font-family:var(--em-font-mono)}
+  .providerlist{display:grid;gap:8px;max-height:44vh;overflow:auto}
+  .providerlist .none{font-size:12px;color:var(--em-ink-faint)}
+  .provider{border:1px solid var(--em-line);border-radius:var(--em-r-md);background:var(--em-bg-inset);padding:10px 12px;display:grid;gap:8px}
+  .provider .prow{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .provider .pname{font-weight:500;color:var(--em-ink)}
+  .provider .pstatus{font-family:var(--em-font-mono);font-size:11px;color:var(--em-ink-dim);display:flex;align-items:center;gap:6px}
+  .provider .pstatus.on{color:var(--em-ok)}
+  .provider .pform{display:grid;gap:6px}
+  .provider .pform .field{font-size:12px;padding:6px 10px}
   body.dropping::after{content:"Drop renders to add them to this project";position:fixed;inset:12px;border:2px dashed var(--em-accent);border-radius:var(--em-r-xl);background:rgba(19,18,17,.75);display:grid;place-items:center;font-size:16px;color:var(--em-ink);z-index:25;pointer-events:none}
   .toasts{position:fixed;right:14px;bottom:14px;display:grid;gap:8px;z-index:30;max-width:380px}
   .toast{padding:10px 14px;border-radius:var(--em-r-md);background:var(--em-panel);backdrop-filter:var(--em-blur);border:1px solid var(--em-line-strong);box-shadow:var(--em-shadow-panel);font-size:13px;color:var(--em-ink);display:flex;gap:10px;align-items:flex-start;animation:em-pop var(--em-t-pop) var(--em-ease)}

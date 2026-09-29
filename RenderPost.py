@@ -23,11 +23,15 @@ import sys
 import json
 import time
 import uuid
+import base64
+import hashlib
+import secrets
 import shutil
 import socket
 import threading
 import webbrowser
 import urllib.parse
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor
@@ -40,7 +44,7 @@ from prompts import (
 )
 
 APP_NAME = "RenderPost"
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.10.0"
 # Optional: where the exe checks for a newer release. Point this at your GitHub repo's
 # latest-release API and the header shows an "Update available" link when a newer tag exists.
 # e.g. "https://api.github.com/repos/YOURNAME/renderpost/releases/latest"   ("" = don't check)
@@ -82,8 +86,30 @@ VIDEO_MODELS = {
 }
 VIDEO_RES = {"480p": "480p · iterate here", "720p": "720p · final"}   # take mode (Seedance)
 # Optional: a JSON at this URL can add or update models without rebuilding the exe.
-# Shape: {"image": {<key>: {...same fields as MODELS...}}, "video": {<key>: {...same fields as VIDEO_MODELS...}}}
+# Shape: {"image": {<key>: {...same fields as MODELS...}}, "video": {<key>: {...same fields as VIDEO_MODELS...}},
+#         "providers": {<id>: {...see PROVIDERS below...}}}
 MODEL_CATALOG_URL = "https://raw.githubusercontent.com/achristo714/RenderPost/main/models.json"   # the app setting "catalog_url" overrides it
+
+# Aggregator connectors for image/video PRODUCTION only — prompt-writing and vision analysis always
+# stay on fal. Empty by default on purpose: this app doesn't favor one aggregator. A provider is
+# added by merging one into the model catalog's "providers" section (see MODEL_CATALOG_URL above,
+# no rebuild needed) or pasted as a one-off "custom provider" in the app's Providers settings.
+# Each entry is declarative, not code — one generic engine (AggregatorProvider) reads any of them:
+#   {"label": "Vendor name",
+#    "transport": "rest_async" | "rest_sync",   # async = submit, then poll until done; sync = submit gets the result directly
+#    "base_url": "https://api.vendor.com",
+#    "auth": {"type": "header_template", "header": "Authorization", "template": "Key {key_id}:{key_secret}",
+#              "fields": ["key_id", "key_secret"]},           # or {"type": "bearer", "fields": ["access_token"]}
+#    "operations": {
+#      "image": {"submit": {"method": "POST", "path": "/models/x/edit", "body": {"prompt": "{prompt}", "image_url": "{image_url}"}},
+#                 "poll": {"path": "/requests/{request_id}/status", "id_field": "id",
+#                           "status_field": "status", "done_value": "completed", "result_field": "result_url"}},
+#      "video": {...same shape, "submit.body" can use {image_urls}/{duration}/{resolution}...}
+#    },
+#    "price": {"image": 0.05, "video": {"480p": 0.05}}}       # same shape MODELS/VIDEO_MODELS price/mult already use
+# A model or video-model entry opts into a provider with "provider": "<id>" (default, if absent: "fal").
+PROVIDERS = {}
+PROVIDER_TRANSPORTS = ("rest_async", "rest_sync")
 VIDEO_DURATIONS = {"4": "4 s", "5": "5 s", "6": "6 s", "8": "8 s", "10": "10 s", "12": "12 s", "15": "15 s"}
 TAKE_DURATIONS = {"8": "8 s", "10": "10 s", "15": "15 s", "20": "20 s", "30": "30 s"}
 MUSIC_EXT = {".mp3", ".wav", ".m4a", ".aac"}
@@ -105,7 +131,8 @@ DEFAULT_CONFIG = {"fal_key": "", "model": "gpt-image-2.5-flare", "quality": "med
                   "resolution": "2K", "variations": "1", "angles": "6", "style_notes": "", "review_first": True,
                   "video_model": "h3max", "video_res": "480p", "show_all_models": False, "video_duration": "5", "take_duration": "15", "video_audio": True,
                   "crossfade": "0.6", "motion_notes": "", "shots": "1", "video_frames": "[]", "energy": "calm",
-                  "character_note": "", "character_desc": "", "take_character": False}
+                  "character_note": "", "character_desc": "", "take_character": False,
+                  "providers": {}, "custom_providers": {}}   # providers: {id: {credential fields..}}; custom_providers: {id: {...PROVIDERS shape}}
 
 
 # ---------------------------------------------------------------- config
@@ -704,6 +731,158 @@ class DemoFal:
         img.save(out_path, "PNG")
 
 
+# ---------------------------------------------------------------- aggregator providers
+def _fill_template(node, args):
+    """Fill a PROVIDERS operation template. A string that's exactly one "{key}" placeholder is
+    replaced with the raw arg (preserving its type, e.g. a list); a string with a placeholder mixed
+    into other text is filled in as text. Dicts/lists recurse."""
+    if isinstance(node, str):
+        if node.startswith("{") and node.endswith("}") and node.count("{") == 1:
+            return args.get(node[1:-1])
+        try:
+            return node.format(**args)
+        except (KeyError, IndexError):
+            return node
+    if isinstance(node, dict):
+        return {k: _fill_template(v, args) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_fill_template(v, args) for v in node]
+    return node
+
+
+def _dig(obj, path):
+    """Read a dotted field path (e.g. "video.url") out of a parsed JSON response."""
+    cur = obj
+    for part in str(path).split("."):
+        cur = cur.get(part) if isinstance(cur, dict) else None
+    return cur
+
+
+class AggregatorProvider:
+    """Generic client for one declarative PROVIDERS entry. Only implements what State needs for
+    production calls — edit() and video() — never prompt-writing or vision analysis, which always
+    stay on fal. One engine serves any conforming provider definition; see PROVIDERS above."""
+    def __init__(self, provider_id, defn, creds):
+        self.id = provider_id
+        self.defn = defn
+        self.creds = creds or {}
+
+    def label(self):
+        return self.defn.get("label", self.id)
+
+    def _headers(self):
+        auth = self.defn.get("auth", {})
+        if auth.get("type") == "header_template":
+            try:
+                value = auth["template"].format(**self.creds)
+            except KeyError as e:
+                raise RuntimeError(f"{self.label()}: missing credential {e}.")
+            return {auth.get("header", "Authorization"): value}
+        if auth.get("type") in ("bearer", "oauth2"):
+            return {"Authorization": f"Bearer {self.creds.get('access_token', '')}"}
+        return {}
+
+    def _refresh_oauth(self):
+        """One retry after a 401: trade the stored refresh_token for a fresh access_token, silently —
+        this is what keeps an oauth2 provider headless after its one-time interactive connect."""
+        auth = self.defn.get("auth", {})
+        if auth.get("type") != "oauth2" or not self.creds.get("refresh_token"):
+            return False
+        data = urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": self.creds["refresh_token"],
+                                         "client_id": auth.get("client_id", "")}).encode()
+        req = urllib.request.Request(auth["token_url"], data=data, method="POST",
+                                       headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            tok = json.loads(r.read().decode("utf-8"))
+        if not tok.get("access_token"):
+            return False
+        self.creds["access_token"] = tok["access_token"]
+        self.creds["refresh_token"] = tok.get("refresh_token", self.creds["refresh_token"])
+        cfg = load_config()
+        cfg.setdefault("providers", {})[self.id] = self.creds
+        save_config(cfg)
+        return True
+
+    def _request(self, method, url, body=None, _retried=False):
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        headers = {**self._headers()}
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                raw = r.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 401 and not _retried and self._refresh_oauth():
+                return self._request(method, url, body, _retried=True)
+            raise
+        return json.loads(raw.decode("utf-8")) if raw else {}
+
+    def _call(self, op, args, cancelled=lambda: False):
+        op_def = (self.defn.get("operations") or {}).get(op)
+        if not op_def:
+            raise RuntimeError(f"{self.label()} has no {op} operation configured.")
+        submit = op_def["submit"]
+        body = _fill_template(submit.get("body", {}), args)
+        url = self.defn["base_url"].rstrip("/") + submit["path"].format(**args)
+        result = with_retry(lambda: self._request(submit.get("method", "POST"), url, body), attempts=2)
+        poll = op_def.get("poll")
+        if not poll:
+            out = _dig(result, op_def.get("result_field", "result_url"))
+            if not out:
+                raise RuntimeError(f"{self.label()} returned no result.")
+            return out
+        req_id = _dig(result, poll.get("id_field", "id"))
+        if not req_id:
+            raise RuntimeError(f"{self.label()} submitted the job but returned no request id.")
+        poll_url = self.defn["base_url"].rstrip("/") + poll["path"].format(request_id=req_id)
+        status_field, done_value, result_field = poll.get("status_field", "status"), poll.get("done_value", "completed"), poll.get("result_field", "result_url")
+        while True:
+            if cancelled():
+                raise Cancelled()
+            pr = with_retry(lambda: self._request("GET", poll_url), attempts=2)
+            status = _dig(pr, status_field)
+            if status == done_value:
+                out = _dig(pr, result_field)
+                if not out:
+                    raise RuntimeError(f"{self.label()} finished but returned no result.")
+                return out
+            if status in ("failed", "error", "cancelled"):
+                raise RuntimeError(f"{self.label()} reported the job {status}.")
+            time.sleep(2.0)
+
+    def edit(self, image_url, prompt, cfg, src_dims, cancelled=lambda: False, extra_urls=()):
+        args = {"prompt": prompt, "image_url": image_url, "image_urls": [image_url] + list(extra_urls),
+                 "width": src_dims[0], "height": src_dims[1]}
+        return [self._call("image", args, cancelled)]
+
+    def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False):
+        args = {"prompt": prompt, "image_url": image_urls[0], "image_urls": list(image_urls),
+                 "duration": str(cfg.get("take_duration") if take else cfg.get("video_duration") or ""),
+                 "resolution": cfg.get("video_res", "")}
+        return self._call("video", args, cancelled)
+
+    def download(self, url, out_path):
+        with urllib.request.urlopen(url, timeout=300) as resp:
+            out_path.write_bytes(resp.read())
+
+
+class DemoAggregator:
+    """Fakes an aggregator provider so --demo mode can exercise provider-backed models too,
+    without needing real credentials. Delegates to DemoFal's own fakes."""
+    def __init__(self, provider_id=None):
+        self._demo = DemoFal()
+
+    def edit(self, *a, **kw):
+        return self._demo.edit(*a, **kw)
+
+    def video(self, *a, **kw):
+        return self._demo.video(*a, **kw)
+
+    def download(self, *a, **kw):
+        return self._demo.download(*a, **kw)
+
+
 # ---------------------------------------------------------------- state + jobs
 class State:
     def __init__(self):
@@ -723,6 +902,29 @@ class State:
         self.video_dir = None
         self.clips = []            # list of dicts, see new_clip()
         self.clip_urls = {}        # (name,file) -> fal url of the uploaded enhanced image
+        self.providers = {}        # provider id -> AggregatorProvider/DemoAggregator, lazily built
+
+    def generator_for(self, model_entry):
+        """fal (default) or an aggregator client, per this model/video-model catalog entry's
+        "provider" field. Only used for the two production calls (edit/video) — prompt-writing and
+        vision analysis always go through self.fal directly, never through this."""
+        pid = (model_entry or {}).get("provider", "fal")
+        if pid == "fal":
+            return self.fal
+        if pid in self.providers:
+            return self.providers[pid]
+        if DEMO:
+            client = DemoAggregator(pid)
+        else:
+            defn = PROVIDERS.get(pid)
+            if not defn:
+                raise RuntimeError(f"Unknown provider \"{pid}\". Check it's connected in Providers settings.")
+            creds = load_config().get("providers", {}).get(pid)
+            if not creds:
+                raise RuntimeError(f"{defn.get('label', pid)} isn't connected. Connect it in Providers settings first.")
+            client = AggregatorProvider(pid, defn, creds)
+        self.providers[pid] = client
+        return client
 
     def scan(self):
         meta = {}
@@ -863,7 +1065,8 @@ class State:
                 raise Cancelled()
             self.clip_set(cid, prompt=prompt, step=f"generating {c['duration']}s" + ("" if c.get("vmodel") == "kling" else f" at {c['resolution']}"),
                           duration=cfg["take_duration"] if take else cfg["video_duration"])
-            url = self.fal.video(prompt, urls, cfg, take, cancelled)
+            gen = self.generator_for(VIDEO_MODELS.get(c.get("vmodel") or "seedance"))
+            url = gen.video(prompt, urls, cfg, take, cancelled)
             self.clip_set(cid, step="downloading")
             self.video_dir.mkdir(exist_ok=True)
             base = "take" if take else Path(c["sources"][0]["file"]).stem
@@ -871,7 +1074,7 @@ class State:
             while (self.video_dir / f"{base}_clip{n:02d}.mp4").exists():
                 n += 1
             out = self.video_dir / f"{base}_clip{n:02d}.mp4"
-            self.fal.download(url, out)
+            gen.download(url, out)
             pr = probe_video(out)
             extra = {}
             if pr and pr[1]:
@@ -908,18 +1111,19 @@ class State:
             prompts = self.fal.write_angles(url, n, cfg.get("style_notes", ""), char)
             dims = image_dims(src_path) or it["src_size"] or [1920, 1080]
             one = dict(cfg, variations="1")
+            gen = self.generator_for(MODELS.get(cfg["model"]))
             made = []
             for i, ptxt in enumerate(prompts, 1):
                 if cancelled():
                     raise Cancelled()
                 self.set(name, step=f"angle {i} of {len(prompts)}")
-                urls = self.fal.edit(url, ptxt, one, tuple(dims), cancelled, [char] if char else [])
+                urls = gen.edit(url, ptxt, one, tuple(dims), cancelled, [char] if char else [])
                 k = 1
                 while (self.out_dir / f"{name}_a{k:02d}.png").exists():
                     k += 1
                 out = self.out_dir / f"{name}_a{k:02d}.png"
                 tmp = out.with_suffix(".tmp.png")
-                self.fal.download(urls[0], tmp)
+                gen.download(urls[0], tmp)
                 shutil.move(str(tmp), str(out))
                 made.append({"file": out.name, "prompt": ptxt, "out_size": image_dims(out), "seconds": round(time.time() - t0),
                              "model": cfg["model"], "quality": cfg["quality"] if MODELS[cfg["model"]]["kind"] == "gpt" else cfg["resolution"],
@@ -1067,7 +1271,8 @@ class State:
             if cancelled():
                 raise Cancelled()
             self.set(name, prompt=prompt, step="enhancing")
-            urls = self.fal.edit(url, prompt, cfg, (w, h), cancelled, [char] if char else [])
+            gen = self.generator_for(MODELS.get(cfg["model"]))
+            urls = gen.edit(url, prompt, cfg, (w, h), cancelled, [char] if char else [])
             self.set(name, step="downloading")
             made = []
             for u in urls:
@@ -1076,7 +1281,7 @@ class State:
                     n += 1
                 out = self.out_dir / f"{name}_v{n:02d}.png"
                 tmp = out.with_suffix(".tmp.png")
-                self.fal.download(u, tmp)
+                gen.download(u, tmp)
                 shutil.move(str(tmp), str(out))
                 made.append({"file": out.name, "prompt": prompt, "out_size": image_dims(out),
                              "seconds": round(time.time() - t0), "model": cfg["model"],
@@ -1144,10 +1349,32 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(n) or b"{}")
 
     def do_GET(self):
-        path = urllib.parse.urlparse(self.path).path
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
         if path == "/":
             html = resource_path("web", "templates", "index.html").read_text(encoding="utf-8")
             return self._send(200, html, "text/html; charset=utf-8")
+        if path.startswith("/oauth/") and path.endswith("/callback"):
+            pid = path[len("/oauth/"):-len("/callback")]
+            q = urllib.parse.parse_qs(parsed.query)
+            pending = OAUTH_PENDING.pop(pid, None)
+            code, state = (q.get("code") or [""])[0], (q.get("state") or [""])[0]
+            page = lambda msg: self._send(200, f"<html><body style='font-family:sans-serif;padding:40px'>{msg}"
+                                                 "<p>You can close this tab.</p></body></html>", "text/html; charset=utf-8")
+            if not pending or state != pending["state"]:
+                return page("Connect request expired or didn't match. Go back to Render Post and try Connect again.")
+            defn = PROVIDERS.get(pid)
+            if not defn or not code:
+                return page("Something went wrong connecting. Go back to Render Post and try Connect again.")
+            try:
+                creds = _oauth_exchange(defn, code, pending["verifier"], f"http://127.0.0.1:{PORT}/oauth/{pid}/callback")
+            except Exception as e:
+                return page(f"Connecting failed: {friendly(e)}")
+            cfg = load_config()
+            cfg.setdefault("providers", {})[pid] = creds
+            save_config(cfg)
+            STATE.providers.pop(pid, None)
+            return page(f"Connected to {defn.get('label', pid)}.")
         if path.startswith("/static/"):
             root = resource_path("web", "static").resolve()
             f = (root / urllib.parse.unquote(path[len("/static/"):])).resolve()
@@ -1164,14 +1391,19 @@ class Handler(BaseHTTPRequestHandler):
                 "character": {"file": "character.png?v=" + str(int(STATE.character_path().stat().st_mtime)) if STATE.character_path() else None,
                               "desc": cfg.get("character_desc", "")},
                 "version": APP_VERSION, "latest": LATEST, "catalog": {**CATALOG_STATUS, "url": cfg.get("catalog_url", "") or MODEL_CATALOG_URL},
-                "config": {k: v for k, v in cfg.items() if k != "fal_key"},
+                "config": {k: v for k, v in cfg.items() if k not in ("fal_key", "providers", "custom_providers")},
                 "size_options": SIZE_OPTIONS, "quality_options": QUALITY_OPTIONS,
-                "models": {k: {"label": v["label"], "kind": v["kind"], "hint": v["hint"], "price": v.get("price"), "mult": v.get("mult"), "recommended": v.get("recommended", False)} for k, v in MODELS.items()},
+                "models": {k: {"label": v["label"], "kind": v["kind"], "hint": v["hint"], "price": v.get("price"), "mult": v.get("mult"), "recommended": v.get("recommended", False), "provider": v.get("provider", "fal")} for k, v in MODELS.items()},
                 "res_options": RES_OPTIONS, "variation_options": VARIATION_OPTIONS, "angle_options": ANGLE_OPTIONS,
                 "picks": sum(1 for it in STATE.snapshot() for v in it["versions"] if v.get("pick")),
                 "spend": float(cfg.get("spend") or 0), "spend_alert": float(cfg.get("spend_alert") or 10),
                 "clips": STATE.clips_snapshot(),
-                "video": {"res": VIDEO_RES, "models": {k: {"label": v["label"], "hint": v["hint"], "price": v["price"], "res": v.get("res"), "recommended": v.get("recommended", False), "min_duration": v.get("min_duration", 1)} for k, v in VIDEO_MODELS.items()},
+                "providers": {k: {"label": v.get("label", k), "transport": v.get("transport"),
+                                    "fields": (v.get("auth") or {}).get("fields", []),
+                                    "auth_type": (v.get("auth") or {}).get("type"),
+                                    "connected": bool(cfg.get("providers", {}).get(k)) or DEMO}
+                              for k, v in PROVIDERS.items()},
+                "video": {"res": VIDEO_RES, "models": {k: {"label": v["label"], "hint": v["hint"], "price": v["price"], "res": v.get("res"), "recommended": v.get("recommended", False), "min_duration": v.get("min_duration", 1), "provider": v.get("provider", "fal")} for k, v in VIDEO_MODELS.items()},
                           "durations": VIDEO_DURATIONS,
                           "take_durations": TAKE_DURATIONS, "ffmpeg": bool(ffmpeg_exe()),
                           "music": sorted(p.name for p in STATE.folder.iterdir() if p.is_file() and p.suffix.lower() in MUSIC_EXT)},
@@ -1494,6 +1726,57 @@ class Handler(BaseHTTPRequestHandler):
             phrases = [p for p in phrases if p["id"] != pid]
             save_phrases(phrases)
             return self._send(200, {"ok": True, "phrases": phrases})
+        if path == "/api/providers/custom":
+            pid = str(body.get("id") or "").strip()
+            if body.get("remove"):
+                cfg.get("custom_providers", {}).pop(pid, None)
+                save_config(cfg)
+                return self._send(200, {"ok": True})
+            defn = body.get("definition")
+            if not pid or not isinstance(defn, dict):
+                return self._send(400, {"error": "Need a provider id and a definition object."})
+            if defn.get("transport") not in PROVIDER_TRANSPORTS or not defn.get("base_url") or not defn.get("operations"):
+                return self._send(400, {"error": "Definition needs transport (rest_async/rest_sync), base_url and operations."})
+            cfg.setdefault("custom_providers", {})[pid] = defn
+            save_config(cfg)
+            _merge_providers({pid: defn})
+            return self._send(200, {"ok": True})
+        if path == "/api/providers/connect":
+            pid = str(body.get("id") or "").strip()
+            if pid not in PROVIDERS:
+                return self._send(404, {"error": "Unknown provider."})
+            fields = body.get("fields") or {}
+            needed = (PROVIDERS[pid].get("auth") or {}).get("fields", [])
+            if needed and not all(str(fields.get(f, "")).strip() for f in needed):
+                return self._send(400, {"error": "Fill in every field."})
+            cfg.setdefault("providers", {})[pid] = {k: str(v).strip() for k, v in fields.items()}
+            save_config(cfg)
+            STATE.providers.pop(pid, None)   # rebuild with the new credentials next time it's used
+            return self._send(200, {"ok": True})
+        if path == "/api/providers/oauth/start":
+            # One-time interactive step for an oauth2 provider: open the system browser to its
+            # authorize URL. Every actual generation call afterward is headless, using the stored
+            # (and auto-refreshed) token — see /oauth/<id>/callback below.
+            pid = str(body.get("id") or "").strip()
+            defn = PROVIDERS.get(pid)
+            auth = (defn or {}).get("auth") or {}
+            if not defn or auth.get("type") != "oauth2":
+                return self._send(404, {"error": "Unknown OAuth provider."})
+            verifier = base64.urlsafe_b64encode(secrets.token_bytes(40)).decode().rstrip("=")
+            challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+            state = secrets.token_hex(16)
+            OAUTH_PENDING[pid] = {"verifier": verifier, "state": state}
+            params = {"client_id": auth.get("client_id", ""), "response_type": "code",
+                      "redirect_uri": f"http://127.0.0.1:{PORT}/oauth/{pid}/callback",
+                      "scope": auth.get("scope", ""), "state": state,
+                      "code_challenge": challenge, "code_challenge_method": "S256"}
+            return self._send(200, {"ok": True, "url": auth["authorize_url"] + "?" + urllib.parse.urlencode(params)})
+        if path == "/api/providers/disconnect":
+            pid = str(body.get("id") or "").strip()
+            cfg.get("providers", {}).pop(pid, None)
+            save_config(cfg)
+            STATE.providers.pop(pid, None)
+            return self._send(200, {"ok": True})
         if not cfg["fal_key"] and not DEMO:
             return self._send(400, {"error": "Add your fal key first."})
         if STATE.fal is None:
@@ -1675,27 +1958,57 @@ LATEST = {"version": None, "url": None}
 CATALOG_STATUS = {"url": "", "ok": None, "note": ""}
 
 
+PORT = None                     # set once main() binds the server; used to build the OAuth redirect_uri
+OAUTH_PENDING = {}              # provider id -> {"verifier": ..., "state": ...} for an in-flight one-time connect
+
+
+def _merge_providers(d):
+    for k, v in (d or {}).items():
+        if isinstance(v, dict) and v.get("transport") in PROVIDER_TRANSPORTS and v.get("base_url") and v.get("operations"):
+            PROVIDERS[k] = {**PROVIDERS.get(k, {}), **v}
+
+
+def _oauth_exchange(defn, code, verifier, redirect_uri):
+    """Trade the one-time authorization code for tokens (PKCE, no client secret — this app never
+    ships one). Standard OAuth2 form-encoded token endpoint; returns whatever fields the provider's
+    auth.fields declares (typically access_token/refresh_token)."""
+    auth = defn.get("auth") or {}
+    data = urllib.parse.urlencode({"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri,
+                                     "client_id": auth.get("client_id", ""), "code_verifier": verifier}).encode()
+    req = urllib.request.Request(auth["token_url"], data=data, method="POST",
+                                   headers={"Content-Type": "application/x-www-form-urlencoded"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        tok = json.loads(r.read().decode("utf-8"))
+    fields = auth.get("fields") or ["access_token", "refresh_token"]
+    return {f: tok.get(f, "") for f in fields if tok.get(f)}
+
+
 def load_catalog():
-    """Merge a remote model catalog over the built-in tables, if configured."""
+    """Merge a remote model catalog over the built-in tables, if configured, then always merge
+    the user's own locally-pasted custom providers over that (works even offline / with no
+    catalog_url set, since those never depend on a network fetch)."""
     url = (load_config().get("catalog_url") or MODEL_CATALOG_URL or "").strip()
     CATALOG_STATUS.update(url=url, ok=None, note="")
-    if not url:
-        return
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
-        with urllib.request.urlopen(req, timeout=8) as r:
-            d = json.loads(r.read().decode("utf-8"))
-        for k, v in (d.get("image") or {}).items():
-            if isinstance(v, dict) and v.get("endpoint") and v.get("kind") in ("gpt", "nano"):
-                MODELS[k] = {**MODELS.get(k, {}), **v}
-        n = 0
-        for k, v in (d.get("video") or {}).items():
-            if isinstance(v, dict) and v.get("i2v"):
-                VIDEO_MODELS[k] = {**VIDEO_MODELS.get(k, {}), **v}; n += 1
-        n += sum(1 for v in (d.get("image") or {}).values() if isinstance(v, dict) and v.get("endpoint"))
-        CATALOG_STATUS.update(ok=True, note=f"{n} model entr{'y' if n == 1 else 'ies'} loaded")
-    except Exception as e:
-        CATALOG_STATUS.update(ok=False, note=str(e)[:120])
+    if url:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                d = json.loads(r.read().decode("utf-8"))
+            # A model dispatches to fal via "endpoint"/"i2v", or to an aggregator via "provider" —
+            # either is enough to be usable; "kind" (image) is always required, it drives the UI controls.
+            for k, v in (d.get("image") or {}).items():
+                if isinstance(v, dict) and v.get("kind") in ("gpt", "nano") and (v.get("endpoint") or v.get("provider")):
+                    MODELS[k] = {**MODELS.get(k, {}), **v}
+            n = 0
+            for k, v in (d.get("video") or {}).items():
+                if isinstance(v, dict) and (v.get("i2v") or v.get("provider")):
+                    VIDEO_MODELS[k] = {**VIDEO_MODELS.get(k, {}), **v}; n += 1
+            n += sum(1 for v in (d.get("image") or {}).values() if isinstance(v, dict) and v.get("kind") in ("gpt", "nano"))
+            _merge_providers(d.get("providers"))
+            CATALOG_STATUS.update(ok=True, note=f"{n} model entr{'y' if n == 1 else 'ies'} loaded")
+        except Exception as e:
+            CATALOG_STATUS.update(ok=False, note=str(e)[:120])
+    _merge_providers(load_config().get("custom_providers"))
 
 
 def check_updates():
@@ -1759,6 +2072,8 @@ def main():
     open_folder(STATE.folder)
 
     port = free_port()
+    global PORT
+    PORT = port
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{port}/"

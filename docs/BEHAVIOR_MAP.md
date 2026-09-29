@@ -1,6 +1,6 @@
 # Render Post — Behavior Map
 
-> Last verified against: v1.9.0
+> Last verified against: v1.10.0
 
 This is a map of how Render Post actually behaves: what happens when you click something, where
 that gets saved, and what logic decides the result. It is **not** a user guide (that's
@@ -29,6 +29,7 @@ touch.
    - [3.8 Model catalog & pricing](#38-model-catalog--pricing)
    - [3.9 Settings / config](#39-settings--config)
    - [3.10 Saved phrases](#310-saved-phrases)
+   - [3.11 Aggregator providers](#311-aggregator-providers)
 4. [AI / prompt-brief reference](#4-ai--prompt-brief-reference)
 5. [Demo mode approximations](#5-demo-mode-approximations)
 6. [View / interaction map](#6-view--interaction-map)
@@ -321,6 +322,53 @@ notes themselves. Reads/writes are serialized under `PHRASES_FILE_LOCK` the same
 saved-phrase popup re-renders immediately after an add or delete; inserting a phrase runs through
 the same `input`-event pipeline as typing, so it triggers the normal autosave and prompt-length
 recalculation.
+
+### 3.11 Aggregator providers
+
+**Scope, on purpose:** only the two production calls — `Fal.edit()` (image) and `Fal.video()`
+(video) — are ever routed to a third-party provider. Writing prompts, writing angle/motion
+prompts, generating the character reference portrait, and every upload/download of a *source*
+image always go through `self.fal` directly; nothing in this feature touches that path.
+
+**Choosing a provider is choosing a model.** `MODELS`/`VIDEO_MODELS` entries carry an optional
+`"provider"` key (default, if absent: `"fal"`, today's only behavior, unchanged). A model whose
+provider isn't connected simply doesn't appear in the `#model`/`#vmodel` dropdowns — there's no
+separate global "fal vs. aggregator" switch; picking a provider-backed entry from the model
+dropdown *is* the switch, exactly like picking GPT Image vs. Nano Banana today. Connected
+provider-backed models show a `· ProviderLabel` suffix in the dropdown.
+
+**Providers are declarative, not code.** `PROVIDERS` (empty by default — the app favors no
+aggregator) holds connector definitions: transport (`rest_async` = submit then poll until done,
+matching the exact shape `Fal.edit()`/`Fal.video()` already use against fal.ai; `rest_sync` =
+submit returns the result directly), `base_url`, an `auth` block (`header_template` for an
+API-key style header, or `oauth2` for a one-time-consent flow), and per-operation `submit`/`poll`
+templates. One generic engine, `AggregatorProvider`, reads any conforming definition — adding a
+new aggregator (or fixing one whose API changed) never needs a rebuild. Providers arrive the same
+way extra models do: merged from the model catalog's `providers` section (same `catalog_url`,
+see §3.8), or pasted as a one-off "custom provider" in Connect providers, stored in
+`config.json`'s `custom_providers` and merged in regardless of whether the remote catalog fetch
+succeeds.
+
+**Connecting:** the "Connect providers" button (next to Change key) lists every known provider
+with its connection status. An API-key provider gets a small form (fields named by the provider's
+own `auth.fields`) POSTed to `/api/providers/connect`, saved into `config.json`'s `providers`
+dict (same location/never-in-the-render-folder rule as `fal_key`). An `oauth2` provider gets a
+single Connect button: `/api/providers/oauth/start` builds a PKCE authorize URL (no client secret
+is ever embedded — this app ships as a public/native client) and opens it in a new tab; the app's
+own local server handles the redirect at `/oauth/<id>/callback`, exchanges the code for tokens,
+and saves them the same way. Every actual generation call afterward is headless; a 401 during a
+call triggers one silent refresh-token exchange before failing for real.
+
+**Dispatch:** `State.generator_for(model_entry)` resolves `self.fal` or a cached
+`AggregatorProvider`/`DemoAggregator` per the model's `provider` field, used at the three call
+sites (`_job`, `_angles_job`, `_clip_job`) in place of `self.fal.edit()`/`self.fal.video()`.
+Downloading the result also goes through whichever client produced it, since a provider's output
+may need its own auth header to fetch. Pricing reuses the exact `price`/`mult` shape
+`MODELS`/`VIDEO_MODELS` already use, so `image_cost()`/`video_cost()` need no special-casing —
+a provider-backed catalog entry just declares its own price like any fal one does.
+
+**Demo mode:** `DemoAggregator` mirrors `DemoFal`'s fakes (it delegates straight to a `DemoFal`
+instance) so a provider-backed model can be exercised in `--demo` mode without credentials.
 
 ## 4. AI / prompt-brief reference
 

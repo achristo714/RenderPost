@@ -24,8 +24,14 @@ function saveConfig(extra={}){
   saveTimer = setTimeout(() => saveNow(extra).then(render), 250);
 }
 
-function modelOpts(table, all){ return Object.fromEntries(Object.entries(table).filter(([k,v]) => all || v.recommended).map(([k,v]) => [k, v.label])); }
-function syncModel(){ const m = S.models[$("#model").value]; if (!m) return; $("#setup").dataset.kind = m.kind; $("#modelhint").textContent = m.hint + (m.price ? " · fal rates as of Aug 2026" : ""); }
+function providerOk(v){ return !v.provider || v.provider === "fal" || (S.providers[v.provider] && S.providers[v.provider].connected); }
+function modelOpts(table, all){
+  return Object.fromEntries(Object.entries(table).filter(([k,v]) => (all || v.recommended) && providerOk(v))
+    .map(([k,v]) => [k, v.provider && v.provider !== "fal" ? `${v.label} · ${(S.providers[v.provider]||{}).label || v.provider}` : v.label]));
+}
+function syncModel(){ const m = S.models[$("#model").value]; if (!m) return; $("#setup").dataset.kind = m.kind;
+  const rates = m.price ? (m.provider && m.provider !== "fal" ? ` · ${(S.providers[m.provider]||{}).label || m.provider} rates` : " · fal rates as of Aug 2026") : "";
+  $("#modelhint").textContent = m.hint + rates; }
 function fillModels(){
   const extra = Object.values(S.models).some(v => !v.recommended) || Object.values(S.video.models).some(v => !v.recommended);
   for (const el of document.querySelectorAll(".showall")) el.hidden = !extra;
@@ -97,6 +103,9 @@ async function boot(){
   $("#catalogbtn").addEventListener("click", () => { $("#catalogurl").value = (S.catalog && S.catalog.url) || ""; $("#catalogstatus").innerHTML = catalogLine(); $("#catalogmodal").hidden = false; });
   $("#catalogcancel").addEventListener("click", () => $("#catalogmodal").hidden = true);
   $("#catalogsave").addEventListener("click", async () => { await api("/api/config", {catalog_url: $("#catalogurl").value}); setTimeout(() => location.reload(), 600); });
+  $("#providersbtn").addEventListener("click", openProvidersModal);
+  $("#providerscancel").addEventListener("click", () => $("#providersmodal").hidden = true);
+  $("#customprovidersave").addEventListener("click", saveCustomProvider);
   $("#charnote").value = S.config.character_note || ""; $("#chardesc").value = S.character.desc || "";
   $("#charnote").addEventListener("input", () => saveConfig());
   $("#chargen").addEventListener("click", async () => { const b = $("#chargen"); b.disabled = true; b.textContent = "Generating"; const r = await api("/api/character/generate", {description: $("#chardesc").value}); b.disabled = false; b.textContent = "Generate"; if (r.need_key) { openKey(false); return; } if (r.error) { toast(r.error); return; } await poll(); renderChar(); });
@@ -186,7 +195,62 @@ async function deletePhrase(id){
   phrases = r.phrases || phrases;
   openPhraseModal();
 }
-document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#phrasemodal").hidden) $("#phrasemodal").hidden = true; });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#phrasemodal").hidden) $("#phrasemodal").hidden = true; if (e.key === "Escape" && !$("#providersmodal").hidden) $("#providersmodal").hidden = true; });
+
+function renderProviders(){
+  const list = $("#providerlist");
+  const ids = Object.keys(S.providers || {});
+  if (!ids.length) { list.innerHTML = `<span class="none">No providers in the catalog yet. Add one below, or point Settings → catalog at one that lists them.</span>`; return; }
+  list.innerHTML = ids.map(id => {
+    const p = S.providers[id];
+    const status = p.connected ? `<span class="pstatus on"><i class="dot ok"></i>Connected</span>` : `<span class="pstatus"><i class="dot"></i>Not connected</span>`;
+    let form;
+    if (p.connected) {
+      form = `<button class="btn quiet" type="button" data-act="disconnect" data-id="${esc(id)}">Disconnect</button>`;
+    } else if (p.auth_type === "oauth2") {
+      form = `<button class="btn solid" type="button" data-act="oauth" data-id="${esc(id)}">Connect</button>`;
+    } else {
+      const fields = (p.fields || []).map(f => `<input class="field" type="password" data-field="${esc(f)}" placeholder="${esc(f)}" autocomplete="off" spellcheck="false">`).join("");
+      form = `<div class="pform">${fields}<button class="btn solid" type="button" data-act="connect" data-id="${esc(id)}">Connect</button></div>`;
+    }
+    return `<div class="provider"><div class="prow"><span class="pname">${esc(p.label)}</span>${status}</div>${form}</div>`;
+  }).join("");
+  for (const b of list.querySelectorAll('[data-act="connect"]')) b.addEventListener("click", async () => {
+    const card = b.closest(".provider");
+    const fields = {}; for (const inp of card.querySelectorAll("[data-field]")) fields[inp.dataset.field] = inp.value;
+    b.disabled = true; b.textContent = "Connecting";
+    const r = await api("/api/providers/connect", {id: b.dataset.id, fields});
+    b.disabled = false; b.textContent = "Connect";
+    if (r.error) { toast(r.error); return; }
+    await poll(); fillModels(); renderProviders();
+  });
+  for (const b of list.querySelectorAll('[data-act="disconnect"]')) b.addEventListener("click", async () => {
+    await api("/api/providers/disconnect", {id: b.dataset.id});
+    await poll(); fillModels(); renderProviders();
+  });
+  for (const b of list.querySelectorAll('[data-act="oauth"]')) b.addEventListener("click", async () => {
+    const r = await api("/api/providers/oauth/start", {id: b.dataset.id});
+    if (r.error) { toast(r.error); return; }
+    window.open(r.url, "_blank", "noopener");
+    toast("Finish connecting in the tab that just opened, then come back here.", "ok", 6000);
+    const poller = setInterval(async () => { await poll(); if ((S.providers[b.dataset.id] || {}).connected) { clearInterval(poller); fillModels(); renderProviders(); } }, 2000);
+    setTimeout(() => clearInterval(poller), 120000);
+  });
+}
+function openProvidersModal(){ renderProviders(); $("#providersmodal").hidden = false; }
+async function saveCustomProvider(){
+  const id = $("#customproviderid").value.trim();
+  $("#customprovidererr").hidden = true;
+  let def;
+  try { def = JSON.parse($("#customproviderjson").value); }
+  catch { $("#customprovidererr").textContent = "That's not valid JSON."; $("#customprovidererr").hidden = false; return; }
+  if (!id) { $("#customprovidererr").textContent = "Give it an id."; $("#customprovidererr").hidden = false; return; }
+  const r = await api("/api/providers/custom", {id, definition: def});
+  if (r.error) { $("#customprovidererr").textContent = r.error; $("#customprovidererr").hidden = false; return; }
+  $("#customproviderid").value = ""; $("#customproviderjson").value = "";
+  await poll(); fillModels(); renderProviders();
+  toast("Provider added", "ok", 2500);
+}
 async function waitForFolder(){
   // the picker runs on the desktop; poll until the folder changes or the user cancels (~2 min)
   const before = S.folder; const t0 = Date.now();
@@ -219,7 +283,7 @@ async function regen(name, rewrite){
   if (r.error) toast(r.error); poll();
 }
 let lastCount = null;
-async function poll(){ const s = await api("/api/state"); if (lastCount !== null && s.items.length > lastCount) toast(`${s.items.length - lastCount} new render${s.items.length - lastCount === 1 ? "" : "s"} found in the folder`, "ok", 4000); lastCount = s.items.length; S.items = s.items; S.active = s.active; S.picks = s.picks; S.clips = s.clips || []; S.video = s.video || S.video; S.recent = s.recent || []; S.character = s.character || {}; S.catalog = s.catalog || S.catalog; S.spend = s.spend; S.spend_alert = s.spend_alert;
+async function poll(){ const s = await api("/api/state"); if (lastCount !== null && s.items.length > lastCount) toast(`${s.items.length - lastCount} new render${s.items.length - lastCount === 1 ? "" : "s"} found in the folder`, "ok", 4000); lastCount = s.items.length; S.items = s.items; S.active = s.active; S.picks = s.picks; S.clips = s.clips || []; S.video = s.video || S.video; S.recent = s.recent || []; S.character = s.character || {}; S.catalog = s.catalog || S.catalog; S.spend = s.spend; S.spend_alert = s.spend_alert; S.providers = s.providers || {};
   if (s.latest && s.latest.version) { const u = $("#update"); u.textContent = `v${s.latest.version} available`; u.href = s.latest.url || "#"; u.hidden = false; }
   render(); }
 

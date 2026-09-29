@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.10.0
+- Image/video generation (never prompt-writing or vision analysis, which stay on fal) can be routed to a third-party aggregator instead of fal.ai, chosen per model in the existing Model/Video model dropdowns. New "Connect providers" settings panel handles per-provider API-key or one-time OAuth connect; headless afterward. Providers are declarative catalog entries (none built in by default), added via the model catalog JSON or pasted as a custom provider. (Filip Filyov)
+
 ## 1.9.0
 - Style notes and Motion notes gain saved phrases: select text and "Add phrase" to save it, then reopen it from a "Saved phrases" button or Shift+Tab in either box and click to insert it at your cursor. Both boxes share one phrase library. Phrases can be deleted from the same list. Stored in a new `%APPDATA%\RenderPost\phrases.json`, separate from other settings and shared across every project. (Filip Filyov)
 
