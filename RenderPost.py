@@ -64,6 +64,12 @@ MODELS = {
     "nano-banana-2":   {"label": "Nano Banana 2 · Google, fast", "endpoint": "fal-ai/nano-banana-2/edit", "kind": "nano", "recommended": True,
                         "price": 0.08, "mult": {"1K": 1, "2K": 1.5, "4K": 2},
                         "hint": "fastest and cheapest, good for quick passes · $0.08 per image, 2K x1.5, 4K x2"},
+    "gpt-image-2.5-flare-higgsfield":    {"label": "GPT Image 2.5 Flare · OpenAI", "kind": "nano", "provider": "higgsfield", "recommended": True,
+                        "variant": "flare", "price": 0.017, "mult": {"1K": 1, "2K": 2, "4K": 2.5},
+                        "hint": "same OpenAI model as the fal Flare entry · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first"},
+    "gpt-image-2.5-sunburst-higgsfield": {"label": "GPT Image 2.5 Sunburst · OpenAI", "kind": "nano", "provider": "higgsfield", "recommended": True,
+                        "variant": "sunburst", "price": 0.017, "mult": {"1K": 1, "2K": 2, "4K": 2.5},
+                        "hint": "same OpenAI model as the fal Sunburst entry · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first"},
 }
 RES_OPTIONS = {"1K": "1K (about 1024px)", "2K": "2K (about 2048px)", "4K": "4K (about 4096px)"}
 
@@ -85,6 +91,10 @@ VIDEO_MODELS = {
                  "hint": "strong motion and the only model for single takes · strict filter: refuses frames with realistic people",
                  "res": {"480p": "480p · iterate here", "720p": "720p · final"},
                  "price": {"480p": 0.2205, "720p": 0.4730}},        # per second, fal Aug 2026
+    "seedance-higgsfield": {"label": "Seedance 2.5 · ByteDance", "provider": "higgsfield", "recommended": True,
+                 "hint": "same ByteDance model as the fal entry · runs on your Higgsfield subscription credits instead of a separate fal balance · adds 1080p · connect Higgsfield first",
+                 "res": {"480p": "480p · iterate here", "720p": "720p", "1080p": "1080p · final"}, "min_duration": 4,
+                 "price": {"480p": 0.10, "720p": 0.23, "1080p": 0.40}},   # per second, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
 }
 VIDEO_RES = {"480p": "480p · iterate here", "720p": "720p · final"}   # take mode (Seedance)
 # Optional: a JSON at this URL can add or update models without rebuilding the exe.
@@ -135,7 +145,46 @@ MODEL_CATALOG_URL = "https://raw.githubusercontent.com/achristo714/RenderPost/ma
 #   imported lazily so the app runs fine without it when no mcp_http provider is connected.
 #
 # A model or video-model entry opts into a provider with "provider": "<id>" (default, if absent: "fal").
-PROVIDERS = {}
+# Higgsfield ships built in, connected/toggled the same way a user-added provider would be — same
+# entry as docs/provider-example-higgsfield.json. Artlist and Nim.video are meant to join it the
+# same way once their own connection details are worked out; the engine above already supports
+# any of them equally, this dict just isn't required to stay empty.
+PROVIDERS = {"higgsfield": {
+    "label": "Higgsfield", "transport": "mcp_http", "mcp_url": "https://mcp.higgsfield.ai/mcp",
+    "auth": {"type": "oauth2", "authorize_url": "https://clerk.higgsfield.ai/oauth/authorize",
+             "token_url": "https://clerk.higgsfield.ai/oauth/token",
+             "registration_endpoint": "https://clerk.higgsfield.ai/oauth/register",
+             "scope": "openid email offline_access", "fields": ["access_token", "refresh_token"]},
+    "operations": {
+        "image": {"steps": [
+            {"tool": "media_import_url", "arguments": {"url": "{image_url}", "type": "image"},
+             "output_as": "media_id", "output_field": "media_id"},
+            {"tool": "media_import_url", "when": "character_url", "arguments": {"url": "{character_url}", "type": "image"},
+             "output_as": "character_media_id", "output_field": "media_id"},
+            {"tool": "generate_image_batch", "arguments": {"requests": [{"index": 0, "params": {
+                "model": "gpt_image_2_5", "variant": "{variant}", "quality": "medium",
+                "resolution": "{resolution}", "aspect_ratio": "{aspect_ratio}", "prompt": "{prompt}",
+                "medias": [{"value": "{media_id}", "role": "image_references"},
+                            {"value": "{character_media_id}", "role": "image_references", "_when": "character_media_id"}],
+                "use_unlim": False}}]},
+             "output_as": "job_id", "output_field": "jobs.0.job_id"},
+            {"tool": "jobs_wait", "poll": True, "poll_done_field": "all_terminal",
+             "poll_delay_field": "poll_after_seconds", "poll_delay": 5,
+             "arguments": {"jobs": [{"index": 0, "job_id": "{job_id}"}], "timeout_seconds": 15},
+             "output_field": "jobs.0.result_url"}]},
+        "video": {"steps": [
+            {"tool": "media_import_url", "arguments": {"url": "{image_url}", "type": "image"},
+             "output_as": "media_id", "output_field": "media_id"},
+            {"tool": "generate_video_batch", "arguments": {"requests": [{"index": 0, "params": {
+                "model": "seedance_2_5", "mode": "omni_reference", "duration": "{duration}",
+                "resolution": "{resolution}", "aspect_ratio": "16:9", "generate_audio": False, "prompt": "{prompt}",
+                "medias": [{"value": "{media_id}", "role": "start_image"}], "use_unlim": False}}]},
+             "output_as": "job_id", "output_field": "jobs.0.job_id"},
+            {"tool": "jobs_wait", "poll": True, "poll_done_field": "all_terminal",
+             "poll_delay_field": "poll_after_seconds", "poll_delay": 5,
+             "arguments": {"jobs": [{"index": 0, "job_id": "{job_id}"}], "timeout_seconds": 15},
+             "output_field": "jobs.0.result_url"}]},
+    }}}
 PROVIDER_TRANSPORTS = ("rest_async", "rest_sync", "mcp_http")
 VIDEO_DURATIONS = {"4": "4 s", "5": "5 s", "6": "6 s", "8": "8 s", "10": "10 s", "12": "12 s", "15": "15 s"}
 TAKE_DURATIONS = {"8": "8 s", "10": "10 s", "15": "15 s", "20": "20 s", "30": "30 s"}
@@ -177,6 +226,7 @@ def config_dir():
 
 FOLDER_FILE_LOCK = threading.Lock()   # renderpost.json is read-modify-written from worker threads and the UI; serialize it
 PHRASES_FILE_LOCK = threading.Lock()   # phrases.json is read-modify-written from the UI; serialize it
+CONFIG_FILE_LOCK = threading.Lock()   # see update_providers_config() — config.json's own save_config() path predates this and isn't covered
 FOLDER_KEYS = ("style_notes", "motion_notes", "video_frames", "character_note", "character_desc", "take_character", "spend")
 LEGACY_MODELS = {"gpt-image-2": "gpt-image-2.5-flare"}     # saved config ids from older builds -> current id
 # GPT Image 2.5 is token priced. Estimate per image by quality and output long edge, from fal's published
@@ -230,6 +280,27 @@ def save_config(cfg):
                     pass
             keep.update({k: cfg.get(k, "") for k in FOLDER_KEYS if k != "spend"})
             fp.write_text(json.dumps(keep, indent=2), encoding="utf-8")
+
+
+def update_providers_config(mutate):
+    """Change "providers" or "custom_providers" in config.json without racing save_config()'s own
+    unlocked, blind-overwrite write (every save_config() caller round-trips a full cfg snapshot
+    that can be stale by the time it writes, and two concurrent callers — e.g. this route and the
+    page's own frequent /api/config autosave — can clobber each other's change; confirmed live
+    while testing Connect/Disconnect). Locks, re-reads config.json fresh from disk, lets `mutate`
+    change just the dict it's handed, writes that back — so only these two keys are protected here,
+    not the wider pre-existing save_config() pattern this doesn't touch."""
+    with CONFIG_FILE_LOCK:
+        p = config_dir() / "config.json"
+        cfg = {}
+        if p.exists():
+            try:
+                cfg = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        mutate(cfg)
+        p.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    return cfg
 
 
 def load_phrases():
@@ -759,10 +830,19 @@ class DemoFal:
 
 
 # ---------------------------------------------------------------- aggregator providers
+_TEMPLATE_SKIP = object()   # internal marker: this templated dict/list item is dropped (its "_when" arg was falsy)
+
+
 def _fill_template(node, args):
     """Fill a PROVIDERS operation template. A string that's exactly one "{key}" placeholder is
     replaced with the raw arg (preserving its type, e.g. a list); a string with a placeholder mixed
-    into other text is filled in as text. Dicts/lists recurse."""
+    into other text is filled in as text. Dicts/lists recurse.
+
+    A dict may carry a "_when": "<arg name>" key — if that arg is falsy/missing, the whole dict is
+    dropped from its parent list instead of being filled (the key itself is stripped before
+    filling). This is how an optional reference image (e.g. a character reference that may or may
+    not be present) gets conditionally included in a fixed-shape list like a "medias" array, without
+    the provider template needing to know whether one was actually passed."""
     if isinstance(node, str):
         if node.startswith("{") and node.endswith("}") and node.count("{") == 1:
             return args.get(node[1:-1])
@@ -771,9 +851,14 @@ def _fill_template(node, args):
         except (KeyError, IndexError):
             return node
     if isinstance(node, dict):
+        if "_when" in node:
+            if not args.get(node["_when"]):
+                return _TEMPLATE_SKIP
+            node = {k: v for k, v in node.items() if k != "_when"}
         return {k: _fill_template(v, args) for k, v in node.items()}
     if isinstance(node, list):
-        return [_fill_template(v, args) for v in node]
+        filled = (_fill_template(v, args) for v in node)
+        return [v for v in filled if v is not _TEMPLATE_SKIP]
     return node
 
 
@@ -791,6 +876,18 @@ def _dig(obj, path):
         else:
             return None
     return cur
+
+
+_MODEL_CATALOG_STRUCTURAL_KEYS = {"label", "kind", "endpoint", "i2v", "provider", "price", "mult",
+                                    "hint", "recommended", "res", "min_duration"}
+
+
+def _model_extra_args(model_entry):
+    """Any field on a MODELS/VIDEO_MODELS catalog entry beyond the structural ones (label, price,
+    provider, ...) is a provider-specific template variable — e.g. two catalog entries can route to
+    the same aggregator provider but pick a different model "variant" by each declaring their own
+    "variant" field, which then fills a provider template's own {variant} placeholder."""
+    return {k: v for k, v in (model_entry or {}).items() if k not in _MODEL_CATALOG_STRUCTURAL_KEYS}
 
 
 async def _mcp_call_once(session, step, args):
@@ -828,6 +925,8 @@ async def _mcp_run_steps(url, headers, steps, args, cancelled):
         async with mcp.ClientSession(read, write) as session:
             await session.initialize()
             for step in steps:
+                if step.get("when") and not args.get(step["when"]):
+                    continue   # optional step (e.g. importing a character reference that wasn't provided) — skipped entirely
                 if step.get("poll"):
                     done_field, done_value = step.get("poll_done_field", "done"), step.get("poll_done_value", True)
                     for _attempt in range(step.get("poll_max_attempts", 60)):
@@ -891,9 +990,7 @@ class AggregatorProvider:
             return False
         self.creds["access_token"] = tok["access_token"]
         self.creds["refresh_token"] = tok.get("refresh_token", self.creds["refresh_token"])
-        cfg = load_config()
-        cfg.setdefault("providers", {})[self.id] = self.creds
-        save_config(cfg)
+        update_providers_config(lambda c: c.setdefault("providers", {}).__setitem__(self.id, self.creds))
         return True
 
     def _request(self, method, url, body=None, _retried=False):
@@ -969,15 +1066,18 @@ class AggregatorProvider:
     def edit(self, image_url, prompt, cfg, src_dims, cancelled=lambda: False, extra_urls=()):
         w, h = src_dims
         g = math.gcd(int(w), int(h)) or 1
-        args = {"prompt": prompt, "image_url": image_url, "image_urls": [image_url] + list(extra_urls),
-                 "width": w, "height": h, "aspect_ratio": f"{int(w)//g}:{int(h)//g}",
-                 "resolution": str(cfg.get("resolution", "")).lower()}
+        args = {**cfg.get("_model_extra", {}),
+                "prompt": prompt, "image_url": image_url, "image_urls": [image_url] + list(extra_urls),
+                "character_url": extra_urls[0] if extra_urls else "",
+                "width": w, "height": h, "aspect_ratio": f"{int(w)//g}:{int(h)//g}",
+                "resolution": str(cfg.get("resolution", "")).lower()}
         return [self._call("image", args, cancelled)]
 
     def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False):
-        args = {"prompt": prompt, "image_url": image_urls[0], "image_urls": list(image_urls),
-                 "duration": str(cfg.get("take_duration") if take else cfg.get("video_duration") or ""),
-                 "resolution": cfg.get("video_res", "")}
+        args = {**cfg.get("_model_extra", {}),
+                "prompt": prompt, "image_url": image_urls[0], "image_urls": list(image_urls),
+                "duration": int(cfg.get("take_duration") if take else cfg.get("video_duration") or 0),
+                "resolution": cfg.get("video_res", "")}
         return self._call("video", args, cancelled)
 
     def download(self, url, out_path):
@@ -1183,8 +1283,9 @@ class State:
                 raise Cancelled()
             self.clip_set(cid, prompt=prompt, step=f"generating {c['duration']}s" + ("" if c.get("vmodel") == "kling" else f" at {c['resolution']}"),
                           duration=cfg["take_duration"] if take else cfg["video_duration"])
-            gen = self.generator_for(VIDEO_MODELS.get(c.get("vmodel") or "seedance"))
-            url = gen.video(prompt, urls, cfg, take, cancelled)
+            vmodel_entry = VIDEO_MODELS.get(c.get("vmodel") or "seedance")
+            gen = self.generator_for(vmodel_entry)
+            url = gen.video(prompt, urls, {**cfg, "_model_extra": _model_extra_args(vmodel_entry)}, take, cancelled)
             self.clip_set(cid, step="downloading")
             self.video_dir.mkdir(exist_ok=True)
             base = "take" if take else Path(c["sources"][0]["file"]).stem
@@ -1228,8 +1329,9 @@ class State:
             self.set(name, step=f"planning {n} angles")
             prompts = self.fal.write_angles(url, n, cfg.get("style_notes", ""), char)
             dims = image_dims(src_path) or it["src_size"] or [1920, 1080]
-            one = dict(cfg, variations="1")
-            gen = self.generator_for(MODELS.get(cfg["model"]))
+            model_entry = MODELS.get(cfg["model"])
+            one = dict(cfg, variations="1", _model_extra=_model_extra_args(model_entry))
+            gen = self.generator_for(model_entry)
             made = []
             for i, ptxt in enumerate(prompts, 1):
                 if cancelled():
@@ -1389,8 +1491,9 @@ class State:
             if cancelled():
                 raise Cancelled()
             self.set(name, prompt=prompt, step="enhancing")
-            gen = self.generator_for(MODELS.get(cfg["model"]))
-            urls = gen.edit(url, prompt, cfg, (w, h), cancelled, [char] if char else [])
+            model_entry = MODELS.get(cfg["model"])
+            gen = self.generator_for(model_entry)
+            urls = gen.edit(url, prompt, {**cfg, "_model_extra": _model_extra_args(model_entry)}, (w, h), cancelled, [char] if char else [])
             self.set(name, step="downloading")
             made = []
             for u in urls:
@@ -1489,9 +1592,7 @@ class Handler(BaseHTTPRequestHandler):
                                           client_id=pending.get("client_id", ""))
             except Exception as e:
                 return page(f"Connecting failed: {friendly(e)}")
-            cfg = load_config()
-            cfg.setdefault("providers", {})[pid] = creds
-            save_config(cfg)
+            update_providers_config(lambda c: c.setdefault("providers", {}).__setitem__(pid, creds))
             STATE.providers.pop(pid, None)
             return page(f"Connected to {defn.get('label', pid)}.")
         if path.startswith("/static/"):
@@ -1520,7 +1621,7 @@ class Handler(BaseHTTPRequestHandler):
                 "providers": {k: {"label": v.get("label", k), "transport": v.get("transport"),
                                     "fields": (v.get("auth") or {}).get("fields", []),
                                     "auth_type": (v.get("auth") or {}).get("type"),
-                                    "connected": bool(cfg.get("providers", {}).get(k)) or DEMO}
+                                    "connected": bool(cfg.get("providers", {}).get(k))}
                               for k, v in PROVIDERS.items()},
                 "video": {"res": VIDEO_RES, "models": {k: {"label": v["label"], "hint": v["hint"], "price": v["price"], "res": v.get("res"), "recommended": v.get("recommended", False), "min_duration": v.get("min_duration", 1), "provider": v.get("provider", "fal")} for k, v in VIDEO_MODELS.items()},
                           "durations": VIDEO_DURATIONS,
@@ -1848,16 +1949,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/providers/custom":
             pid = str(body.get("id") or "").strip()
             if body.get("remove"):
-                cfg.get("custom_providers", {}).pop(pid, None)
-                save_config(cfg)
+                update_providers_config(lambda c: c.get("custom_providers", {}).pop(pid, None))
                 return self._send(200, {"ok": True})
             defn = body.get("definition")
             if not pid or not isinstance(defn, dict):
                 return self._send(400, {"error": "Need a provider id and a definition object."})
             if not _provider_defn_valid(defn):
                 return self._send(400, {"error": "Definition needs a transport (rest_async/rest_sync/mcp_http), operations, and base_url (or mcp_url for mcp_http)."})
-            cfg.setdefault("custom_providers", {})[pid] = defn
-            save_config(cfg)
+            update_providers_config(lambda c: c.setdefault("custom_providers", {}).__setitem__(pid, defn))
             _merge_providers({pid: defn})
             return self._send(200, {"ok": True})
         if path == "/api/providers/connect":
@@ -1868,8 +1967,8 @@ class Handler(BaseHTTPRequestHandler):
             needed = (PROVIDERS[pid].get("auth") or {}).get("fields", [])
             if needed and not all(str(fields.get(f, "")).strip() for f in needed):
                 return self._send(400, {"error": "Fill in every field."})
-            cfg.setdefault("providers", {})[pid] = {k: str(v).strip() for k, v in fields.items()}
-            save_config(cfg)
+            creds = {k: str(v).strip() for k, v in fields.items()}
+            update_providers_config(lambda c: c.setdefault("providers", {}).__setitem__(pid, creds))
             STATE.providers.pop(pid, None)   # rebuild with the new credentials next time it's used
             return self._send(200, {"ok": True})
         if path == "/api/providers/oauth/start":
@@ -1881,6 +1980,13 @@ class Handler(BaseHTTPRequestHandler):
             auth = (defn or {}).get("auth") or {}
             if not defn or auth.get("type") != "oauth2":
                 return self._send(404, {"error": "Unknown OAuth provider."})
+            if DEMO:
+                # Demo mode fakes the whole browser round-trip so Connect/Disconnect and the
+                # dropdown-gating UI can be exercised without a real account — matches how DemoFal
+                # already stands in for fal.ai everywhere else in --demo mode.
+                update_providers_config(lambda c: c.setdefault("providers", {}).__setitem__(pid, {"access_token": "demo", "refresh_token": "demo"}))
+                STATE.providers.pop(pid, None)
+                return self._send(200, {"ok": True, "demo": True})
             redirect_uri = f"http://127.0.0.1:{PORT}/oauth/{pid}/callback"
             client_id = auth.get("client_id", "")
             if auth.get("registration_endpoint"):
@@ -1898,8 +2004,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True, "url": auth["authorize_url"] + "?" + urllib.parse.urlencode(params)})
         if path == "/api/providers/disconnect":
             pid = str(body.get("id") or "").strip()
-            cfg.get("providers", {}).pop(pid, None)
-            save_config(cfg)
+            update_providers_config(lambda c: c.get("providers", {}).pop(pid, None))
             STATE.providers.pop(pid, None)
             return self._send(200, {"ok": True})
         if not cfg["fal_key"] and not DEMO:

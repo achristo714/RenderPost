@@ -5,13 +5,14 @@ fal) can now be sent to a third-party aggregator instead of fal.ai, chosen per m
 existing Model / Video model dropdowns, exactly like switching between GPT Image and Nano Banana
 today.
 
-New "Connect providers" button next to Change key opens a settings panel listing any aggregators
-in the model catalog, with a Connect action for each (an API-key form, or a one-time "Connect"
-button for anything using OAuth — after that one click, every actual generation job runs
-headless, same as fal). A provider's models only show up in the dropdowns once it's connected.
-
-Nothing is built in by default — Render Post doesn't favor one aggregator. Providers arrive the
-same way extra models already do: a JSON file at your catalog URL, no rebuild needed, or pasted
-directly into Connect providers as a one-off "custom provider" for testing.
+Higgsfield ships connected-and-ready: "GPT Image 2.5 Flare/Sunburst · Higgsfield" and "Seedance
+2.5 · Higgsfield" sit next to their fal counterparts once you connect it (same underlying models,
+different billing path — Higgsfield draws on your existing subscription credits instead of a
+separate paid balance). New "Connect providers" button next to Change key handles that: an
+API-key form, or a one-time "Connect" for anything using OAuth — after that one click, every
+actual generation job runs headless, same as fal. A provider's models only show up in the
+dropdowns once it's connected, and disconnecting reverts to fal-only immediately. Artlist and
+Nim.video aren't wired up yet; the same mechanism is ready for them once their connection details
+are worked out. Anyone can add their own provider too — "Add a custom provider" now explains how.
 
 Nothing else changed since 1.9.0.

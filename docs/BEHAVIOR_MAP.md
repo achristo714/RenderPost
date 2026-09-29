@@ -393,13 +393,46 @@ may need its own auth header to fetch. Pricing reuses the exact `price`/`mult` s
 a provider-backed catalog entry just declares its own price like any fal one does.
 
 **Demo mode:** `DemoAggregator` mirrors `DemoFal`'s fakes (it delegates straight to a `DemoFal`
-instance) so a provider-backed model can be exercised in `--demo` mode without credentials.
+instance) so a provider-backed model can be exercised in `--demo` mode without credentials. Demo
+mode also fakes the whole OAuth round-trip for a `oauth2` provider (`/api/providers/oauth/start`
+writes fake tokens directly and returns `{"demo": true}` instead of building a real authorize
+URL) so Connect/Disconnect and the dropdown-gating UI are fully testable without a real account —
+otherwise demo mode's own `connected` bypass previously made Disconnect a no-op (fixed).
 
-**Worked reference:** `docs/provider-example-higgsfield.json` is a complete `mcp_http` provider
-definition for Higgsfield (image edit + image-to-video), every field verified live against the
-real API on 2026-09-29 — not guessed from documentation. Not built into the app; paste it into
-Connect providers → Add a custom provider, or merge it into a hosted catalog. Useful both as a
-working provider and as a template for writing a new one.
+**Optional per-model template args:** a `MODELS`/`VIDEO_MODELS` entry can declare extra fields
+beyond the structural ones (label, price, provider, ...) — e.g. `"variant": "flare"` — which
+`_model_extra_args()` threads into that model's `edit()`/`video()` call as extra template
+placeholders. This is how two catalog entries can route through the *same* provider definition
+but select a different underlying variant (Higgsfield's built-in Flare/Sunburst pair does this),
+without the provider template hardcoding either one.
+
+**Optional/conditional template pieces:** a `steps` entry can carry `"when": "<arg>"` to skip that
+whole tool call when the arg is falsy (e.g. an optional character-reference import), and a list
+item (such as a `medias` entry) can carry `"_when": "<arg>"` to drop just that item instead of the
+whole step — both compose, so an aggregator provider's request only grows an extra reference image
+when one was actually passed to `edit()`.
+
+**Built-in provider:** Higgsfield ships as a real `PROVIDERS` entry (not just documentation) —
+Flare, Sunburst and Seedance 2.5 counterparts to their fal equivalents, all `"recommended": true`
+so they sit next to the fal versions once connected. `docs/provider-example-higgsfield.json`
+mirrors this exact definition; every field was verified live against the real API rather than
+guessed from documentation (Dynamic Client Registration, a real image edit, a real
+image-to-video generation — see its own file for the full verification notes, including what
+hasn't been exercised against the real API yet, like the character-reference path specifically).
+Artlist and Nim.video are meant to join the same way once their connection details are worked
+out; nothing about the engine favors Higgsfield specifically.
+
+**A real, separate bug this surfaced:** `save_config()`'s user-level `config.json` write has no
+locking and blindly overwrites the whole file with whatever (possibly stale) snapshot the calling
+request started from — the same class of problem §7's character-checkbox race was, but in
+`config.json` itself rather than `renderpost.json`, and pre-existing (not introduced by this
+feature). It surfaced here because Connect/Disconnect are now interactive enough to race against
+the page's own frequent `/api/config` autosave. Fixed narrowly for the fields this feature owns:
+`update_providers_config()` locks, re-reads `config.json` fresh from disk, and lets a small
+mutator function change just `providers`/`custom_providers` before writing back — verified under
+real concurrent stress (multiple threads hammering unrelated saves against a thread toggling
+connect/disconnect). The wider pre-existing pattern (every other setting in `config.json`) still
+has the same theoretical race and isn't fixed by this change.
 
 ## 4. AI / prompt-brief reference
 

@@ -222,7 +222,20 @@
     <p>Image and video <b>generation</b> can be sent to a third-party aggregator instead of fal, per model — pick which in the Model / Video model dropdowns once a provider below is connected. Writing prompts and reading images always stays on fal. Providers come from the model catalog (no rebuild needed) or are added below.</p>
     <div id="providerlist" class="providerlist"></div>
     <details><summary class="label" style="cursor:pointer">Add a custom provider</summary>
-      <p class="hint">Paste one provider's definition as JSON. It's saved on this computer only.</p>
+      <p class="hint">Paste one provider's definition as JSON below (saved on this computer only, in
+        <span class="mono">custom_providers</span> — never in the render folder). It needs an id, and
+        a definition with a <span class="mono">transport</span>:</p>
+      <p class="hint"><b>rest_async</b> / <b>rest_sync</b> — a plain HTTP API. Needs <span class="mono">base_url</span>
+        and an <span class="mono">auth</span> block (API-key header, or <span class="mono">oauth2</span>).
+        See the full field reference under "File format" in the <span class="mono">catalog</span> link above
+        (Model row) — it documents the exact submit/poll shape.</p>
+      <p class="hint"><b>mcp_http</b> — a remote MCP server. Needs <span class="mono">mcp_url</span> and an
+        <span class="mono">operations.&lt;image|video&gt;.steps</span> list of MCP tool calls. Use this when a
+        vendor's plain REST API is billed separately from a subscription you already have (its MCP surface
+        often isn't) — this is how Higgsfield is connected in the example below.</p>
+      <p class="hint">A ready, field-verified example: <span class="mono">docs/provider-example-higgsfield.json</span>
+        in the repo — paste its <span class="mono">definition</span> object here with id
+        <span class="mono">higgsfield</span> to connect it for real.</p>
       <input class="field" id="customproviderid" placeholder="id, e.g. higgsfield" spellcheck="false">
       <textarea class="field mono" id="customproviderjson" rows="8" spellcheck="false" placeholder='{"label": "...", "transport": "rest_async", "base_url": "https://...", "auth": {...}, "operations": {"image": {...}, "video": {...}}}'></textarea>
       <div class="err" id="customprovidererr" hidden></div>

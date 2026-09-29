@@ -231,6 +231,7 @@ function renderProviders(){
   for (const b of list.querySelectorAll('[data-act="oauth"]')) b.addEventListener("click", async () => {
     const r = await api("/api/providers/oauth/start", {id: b.dataset.id});
     if (r.error) { toast(r.error); return; }
+    if (r.demo) { await poll(); fillModels(); renderProviders(); toast("Connected (demo)", "ok", 2500); return; }
     window.open(r.url, "_blank", "noopener");
     toast("Finish connecting in the tab that just opened, then come back here.", "ok", 6000);
     const poller = setInterval(async () => { await poll(); if ((S.providers[b.dataset.id] || {}).connected) { clearInterval(poller); fillModels(); renderProviders(); } }, 2000);
