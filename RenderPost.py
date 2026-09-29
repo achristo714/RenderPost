@@ -119,7 +119,13 @@ MODEL_CATALOG_URL = "https://raw.githubusercontent.com/achristo714/RenderPost/ma
 #   step's extracted "output_field" can be stashed as "output_as" for later steps to reference, and
 #   the LAST step's extraction is the operation's result:
 #   {"label": "Vendor name", "transport": "mcp_http", "mcp_url": "https://mcp.vendor.com/mcp",
-#    "auth": {"type": "oauth2", "authorize_url": "...", "token_url": "...", "client_id": "...", "scope": "..."},
+#    "auth": {"type": "oauth2", "authorize_url": "...", "token_url": "...", "scope": "...",
+#              "client_id": "..."},                  # a fixed client_id, OR:
+#    "auth": {"type": "oauth2", "authorize_url": "...", "token_url": "...", "scope": "...",
+#              "registration_endpoint": "..."},       # Dynamic Client Registration (RFC 7591) —
+#              # RenderPost registers itself fresh on every connect (no client_id needed up front;
+#              # a long-cached one would go stale anyway, since the redirect_uri's port changes
+#              # every launch via free_port()) and reuses the resulting client_id for token refresh.
 #    "operations": {"image": {"steps": [
 #      {"tool": "import_url", "arguments": {"url": "{image_url}"}, "output_as": "media_id", "output_field": "media_id"},
 #      {"tool": "generate_image", "arguments": {"prompt": "{prompt}", "media_id": "{media_id}"}, "output_as": "job_id", "output_field": "id"},
@@ -876,9 +882,9 @@ class AggregatorProvider:
         if auth.get("type") != "oauth2" or not self.creds.get("refresh_token"):
             return False
         data = urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": self.creds["refresh_token"],
-                                         "client_id": auth.get("client_id", "")}).encode()
+                                         "client_id": self.creds.get("client_id") or auth.get("client_id", "")}).encode()
         req = urllib.request.Request(auth["token_url"], data=data, method="POST",
-                                       headers={"Content-Type": "application/x-www-form-urlencoded"})
+                                       headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": f"{APP_NAME}/{APP_VERSION}"})
         with urllib.request.urlopen(req, timeout=30) as r:
             tok = json.loads(r.read().decode("utf-8"))
         if not tok.get("access_token"):
@@ -892,7 +898,7 @@ class AggregatorProvider:
 
     def _request(self, method, url, body=None, _retried=False):
         data = json.dumps(body).encode("utf-8") if body is not None else None
-        headers = {**self._headers()}
+        headers = {"User-Agent": f"{APP_NAME}/{APP_VERSION}", **self._headers()}
         if data is not None:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -1479,7 +1485,8 @@ class Handler(BaseHTTPRequestHandler):
             if not defn or not code:
                 return page("Something went wrong connecting. Go back to Render Post and try Connect again.")
             try:
-                creds = _oauth_exchange(defn, code, pending["verifier"], f"http://127.0.0.1:{PORT}/oauth/{pid}/callback")
+                creds = _oauth_exchange(defn, code, pending["verifier"], f"http://127.0.0.1:{PORT}/oauth/{pid}/callback",
+                                          client_id=pending.get("client_id", ""))
             except Exception as e:
                 return page(f"Connecting failed: {friendly(e)}")
             cfg = load_config()
@@ -1874,12 +1881,18 @@ class Handler(BaseHTTPRequestHandler):
             auth = (defn or {}).get("auth") or {}
             if not defn or auth.get("type") != "oauth2":
                 return self._send(404, {"error": "Unknown OAuth provider."})
+            redirect_uri = f"http://127.0.0.1:{PORT}/oauth/{pid}/callback"
+            client_id = auth.get("client_id", "")
+            if auth.get("registration_endpoint"):
+                try:
+                    client_id = _oauth_register(auth, redirect_uri)
+                except Exception as e:
+                    return self._send(500, {"error": f"Couldn't register with {defn.get('label', pid)}: {friendly(e)}"})
             verifier = base64.urlsafe_b64encode(secrets.token_bytes(40)).decode().rstrip("=")
             challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
             state = secrets.token_hex(16)
-            OAUTH_PENDING[pid] = {"verifier": verifier, "state": state}
-            params = {"client_id": auth.get("client_id", ""), "response_type": "code",
-                      "redirect_uri": f"http://127.0.0.1:{PORT}/oauth/{pid}/callback",
+            OAUTH_PENDING[pid] = {"verifier": verifier, "state": state, "client_id": client_id}
+            params = {"client_id": client_id, "response_type": "code", "redirect_uri": redirect_uri,
                       "scope": auth.get("scope", ""), "state": state,
                       "code_challenge": challenge, "code_challenge_method": "S256"}
             return self._send(200, {"ok": True, "url": auth["authorize_url"] + "?" + urllib.parse.urlencode(params)})
@@ -2086,19 +2099,42 @@ def _merge_providers(d):
             PROVIDERS[k] = {**PROVIDERS.get(k, {}), **v}
 
 
-def _oauth_exchange(defn, code, verifier, redirect_uri):
+def _oauth_register(auth, redirect_uri):
+    """Dynamic Client Registration (RFC 7591): some providers (e.g. Higgsfield's Clerk-backed
+    auth) let any new client register itself on the spot instead of requiring a pre-arranged
+    client_id — this is how RenderPost gets one without contacting the vendor first. Registered
+    fresh at the start of every connect flow rather than cached long-term, since RenderPost's own
+    redirect_uri port (free_port()) changes on every launch and a stale registration's redirect_uri
+    would no longer match."""
+    body = json.dumps({"client_name": APP_NAME, "redirect_uris": [redirect_uri], "token_endpoint_auth_method": "none",
+                        "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"],
+                        "application_type": "native"}).encode("utf-8")
+    req = urllib.request.Request(auth["registration_endpoint"], data=body, method="POST",
+                                   headers={"Content-Type": "application/json", "User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        reg = json.loads(r.read().decode("utf-8"))
+    if not reg.get("client_id"):
+        raise RuntimeError("Dynamic client registration didn't return a client_id.")
+    return reg["client_id"]
+
+
+def _oauth_exchange(defn, code, verifier, redirect_uri, client_id=""):
     """Trade the one-time authorization code for tokens (PKCE, no client secret — this app never
     ships one). Standard OAuth2 form-encoded token endpoint; returns whatever fields the provider's
-    auth.fields declares (typically access_token/refresh_token)."""
+    auth.fields declares (typically access_token/refresh_token), plus the client_id actually used
+    (needed later for a refresh_token exchange with the same client)."""
     auth = defn.get("auth") or {}
     data = urllib.parse.urlencode({"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri,
-                                     "client_id": auth.get("client_id", ""), "code_verifier": verifier}).encode()
+                                     "client_id": client_id or auth.get("client_id", ""), "code_verifier": verifier}).encode()
     req = urllib.request.Request(auth["token_url"], data=data, method="POST",
-                                   headers={"Content-Type": "application/x-www-form-urlencoded"})
+                                   headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": f"{APP_NAME}/{APP_VERSION}"})
     with urllib.request.urlopen(req, timeout=30) as r:
         tok = json.loads(r.read().decode("utf-8"))
     fields = auth.get("fields") or ["access_token", "refresh_token"]
-    return {f: tok.get(f, "") for f in fields if tok.get(f)}
+    creds = {f: tok.get(f, "") for f in fields if tok.get(f)}
+    if client_id:
+        creds["client_id"] = client_id
+    return creds
 
 
 def load_catalog():

@@ -373,6 +373,17 @@ own local server handles the redirect at `/oauth/<id>/callback`, exchanges the c
 and saves them the same way. Every actual generation call afterward is headless; a 401 during a
 call triggers one silent refresh-token exchange before failing for real.
 
+If the provider's `auth` block names a `registration_endpoint` instead of (or alongside) a fixed
+`client_id`, `/api/providers/oauth/start` performs Dynamic Client Registration (RFC 7591) first —
+POSTs to that endpoint, gets back a fresh `client_id`, uses it for that connect flow, and stashes
+it in the saved credentials so the later refresh-token exchange reuses the same one. This is
+registered fresh on every connect rather than cached long-term, because RenderPost's OAuth
+redirect_uri embeds its listen port (`free_port()`, different every launch) — a client registered
+against a stale port's redirect_uri would no longer match on a later connect attempt. Verified
+against Higgsfield's real Clerk-backed auth server (`clerk.higgsfield.ai`), which supports this —
+confirming self-service registration (no vendor contact needed) is how "various LLM instances"
+were able to connect to Higgsfield's MCP server just by pointing at its URL.
+
 **Dispatch:** `State.generator_for(model_entry)` resolves `self.fal` or a cached
 `AggregatorProvider`/`DemoAggregator` per the model's `provider` field, used at the three call
 sites (`_job`, `_angles_job`, `_clip_job`) in place of `self.fal.edit()`/`self.fal.video()`.
