@@ -1,7 +1,10 @@
-## Render Post v1.9.0
+## Render Post v1.9.1
 
-Style notes and Motion notes both gain a small phrase library. Select any text you've typed in either box and press "Add phrase" to save it. Reopen your saved phrases with the "Saved phrases" button next to that box, or by pressing Shift+Tab while it's focused, and click one to drop it in at your cursor. Delete phrases you no longer need from that same list.
+Fix: turning on the per-image character checkbox right before pressing Rewrite, Enhance, or Angles
+could occasionally send the job before the checkbox's own save had landed, silently generating
+without the character (about 1 in 5 tries). Those requests now carry the checkbox's current state
+directly, so there's nothing left to race.
 
-The two boxes share one phrase library, so a phrase saved from Style notes can be reused in Motion notes and back. Phrases are saved once, on this computer, and are available across every project you open — not tied to a single render folder.
+Added a small scroll-to-top button that appears once you've scrolled down the page.
 
-Nothing else changed since 1.8.5.
+Nothing else changed since 1.9.0.

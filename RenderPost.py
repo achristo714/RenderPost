@@ -40,7 +40,7 @@ from prompts import (
 )
 
 APP_NAME = "RenderPost"
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.9.1"
 # Optional: where the exe checks for a newer release. Point this at your GitHub repo's
 # latest-release API and the header shows an "Update available" link when a newer tag exists.
 # e.g. "https://api.github.com/repos/YOURNAME/renderpost/releases/latest"   ("" = don't check)
@@ -1527,6 +1527,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": "unknown version"})
             if it["status"] in ("queued", "working"):
                 return self._send(400, {"error": "That image is busy."})
+            if "character_on" in body:
+                STATE.set(name, character_on=bool(body.get("character_on")), character_note=str(body.get("character_note") or ""))
             with STATE.lock:
                 it.update(status="queued", step="waiting", error=None, _cancel=False)
             STATE.pool.submit(STATE._angles_job, name, file, cfg)
@@ -1596,6 +1598,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/enhance_all":
             # Stage 2: send every reviewed prompt. Prompts arrive from the page so edits count.
             prompts = body.get("prompts") or {}
+            char = body.get("char") or {}
             auto_revise = bool(body.get("revise_stale"))
             only = set(body.get("names") or [])
             for it in STATE.snapshot():
@@ -1606,6 +1609,9 @@ class Handler(BaseHTTPRequestHandler):
                 p = (prompts.get(it["name"]) or it["prompt"] or "").strip()
                 if not p:
                     continue
+                c = char.get(it["name"])
+                if c:
+                    STATE.set(it["name"], character_on=bool(c.get("character_on")), character_note=str(c.get("character_note") or ""))
                 hand_edited = p != (it["prompt"] or "").strip()
                 if auto_revise and stale(it) and not hand_edited:
                     STATE.queue(it["name"], "revise_full", None, cfg)   # update prompt, then enhance
@@ -1619,6 +1625,8 @@ class Handler(BaseHTTPRequestHandler):
             name = body.get("name")
             if name not in STATE.items:
                 return self._send(404, {"error": "unknown image"})
+            if "character_on" in body:
+                STATE.set(name, character_on=bool(body.get("character_on")), character_note=str(body.get("character_note") or ""))
             prompt = (body.get("prompt") or "").strip() or None
             if body.get("rewrite"):
                 STATE.queue(name, "prompt", None, cfg)          # fresh prompt for this image only

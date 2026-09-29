@@ -224,4 +224,10 @@
   .hints{position:fixed;left:14px;bottom:12px;display:flex;gap:14px;font-family:var(--em-font-mono);font-size:10px;color:var(--em-ink-faint);pointer-events:none}
   .hints b{color:var(--em-ink-dim);font-weight:500;margin-right:4px}
   .hints{transition:opacity .3s} body.scrolled .hints{opacity:0}
+  .scrolltop{position:fixed;right:14px;bottom:64px;z-index:29;width:32px;height:32px;padding:0;justify-content:center;border-radius:50%;
+    background:var(--em-panel);backdrop-filter:var(--em-blur);border:1px solid var(--em-line-strong);box-shadow:var(--em-shadow-panel);
+    opacity:0;pointer-events:none;transform:translateY(4px);transition:opacity var(--em-t-fast) var(--em-ease),transform var(--em-t-fast) var(--em-ease),background var(--em-t-fast),border-color var(--em-t-fast)}
+  body.scrolled .scrolltop{opacity:1;pointer-events:auto;transform:translateY(0)}
+  .scrolltop:hover{background:var(--em-hover);border-color:var(--em-line-bright)}
+  @media (prefers-reduced-motion:reduce){.scrolltop{transition:opacity .01ms}}
   @media (prefers-reduced-motion:reduce){article,.setup,.modal{animation:none}.dot.live{animation:none}}
