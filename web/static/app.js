@@ -45,14 +45,20 @@ function syncVideoModel(){
   const panel = $("#vmakepanel"); panel.dataset.nores = m.res ? "0" : "1";
   if (m.res) { const cur = $("#vres").value; fill($("#vres"), m.res, m.res[cur] ? cur : Object.keys(m.res)[0]); }
   const minD = m.min_duration || 1, cur = $("#vdur").value;
-  fill($("#vdur"), Object.fromEntries(Object.entries(S.video.durations).filter(([k]) => Number(k) >= minD)), Number(cur) >= minD ? cur : String(minD));
+  const durOpts = m.durations || Object.fromEntries(Object.entries(S.video.durations).filter(([k]) => Number(k) >= minD));
+  fill($("#vdur"), durOpts, durOpts[cur] ? cur : Object.keys(durOpts)[0]);
   $("#vmodelhint").textContent = m.hint || "";
+}
+function imgCost(m){
+  if (m.price_table) return (m.price_table[$("#quality").value] || {})[$("#resolution").value] || 0;
+  if (m.price) return m.price * (m.mult[$("#resolution").value] || 1);
+  return null;
 }
 function estimate(count){
   const m = S.models[$("#model").value], n = Number($("#variations").value);
-  if (!m.price) return `${count * n} generation${count*n===1?"":"s"} · token priced`;
-  const cost = m.price * (m.mult[$("#resolution").value] || 1) * n * count;
-  return `${count * n} generation${count*n===1?"":"s"} · about $${cost.toFixed(2)}`;
+  const per = imgCost(m);
+  if (per == null) return `${count * n} generation${count*n===1?"":"s"} · token priced`;
+  return `${count * n} generation${count*n===1?"":"s"} · about $${(per * n * count).toFixed(2)}`;
 }
 function fill(sel, opts, val){ sel.innerHTML = Object.entries(opts).map(([k,v]) => `<option value="${k}"${k===val?" selected":""}>${v}</option>`).join(""); }
 
@@ -229,10 +235,18 @@ function renderProviders(){
     await poll(); fillModels(); renderProviders();
   });
   for (const b of list.querySelectorAll('[data-act="oauth"]')) b.addEventListener("click", async () => {
+    // Open the tab synchronously, in direct response to the click — a browser can otherwise treat
+    // window.open() called after an await (once the real URL is known) as an unsolicited popup and
+    // silently block it, which looks exactly like "the button does nothing". No "noopener" here:
+    // that makes browsers hand back null even though the blank tab still opens, so there'd be no
+    // way to navigate it once the real URL is known — safe to omit since we navigate it ourselves
+    // to Higgsfield's own authorize URL, not to third-party page content.
+    const tab = window.open("", "_blank");
     const r = await api("/api/providers/oauth/start", {id: b.dataset.id});
-    if (r.error) { toast(r.error); return; }
-    if (r.demo) { await poll(); fillModels(); renderProviders(); toast("Connected (demo)", "ok", 2500); return; }
-    window.open(r.url, "_blank", "noopener");
+    if (r.error) { if (tab) tab.close(); toast(r.error); return; }
+    if (r.demo) { if (tab) tab.close(); await poll(); fillModels(); renderProviders(); toast("Connected (demo)", "ok", 2500); return; }
+    if (tab) { tab.location.href = r.url; }
+    else { toast(`Your browser blocked the popup — open this link yourself: ${r.url}`, "bad", 15000); }
     toast("Finish connecting in the tab that just opened, then come back here.", "ok", 6000);
     const poller = setInterval(async () => { await poll(); if ((S.providers[b.dataset.id] || {}).connected) { clearInterval(poller); fillModels(); renderProviders(); } }, 2000);
     setTimeout(() => clearInterval(poller), 120000);
@@ -299,7 +313,7 @@ function stateLine(it){
 function render(){
   const items = S.items, busy = items.filter(i => i.status === "working" || i.status === "queued").length;
   const done = items.filter(i => i.status === "done").length, failed = items.filter(i => i.status === "failed").length;
-  const mdl = S.models[S.config.model] || {}; const setting = mdl.kind === "nano" ? S.config.resolution : `${S.config.quality} · ${S.config.long_edge}px`;
+  const mdl = S.models[S.config.model] || {}; const setting = mdl.kind === "nano" ? S.config.resolution : mdl.kind === "gptres" ? `${S.config.quality} · ${S.config.resolution}` : `${S.config.quality} · ${S.config.long_edge}px`;
   $("#meta").innerHTML = [`<b>${items.length}</b> images`, "<s>·</s>", `<b>${done}</b> done`, failed ? `<s>·</s> <b>${failed}</b> failed` : "", S.picks ? `<s>·</s> <b>${S.picks}</b> picked` : "", "<s>·</s>", `${(mdl.label || "").split(" ·")[0]} · ${setting}`].join(" ");
   $("#status").innerHTML = busy ? `<i class="dot live"></i>${busy} in progress` : `<i class="dot ok"></i>idle`;
   const sp = Number(S.spend || 0), lim = Number(S.spend_alert || 10); $("#spend").innerHTML = sp > 0 ? `<i class="dot ${sp >= lim ? "warn" : ""}"></i>≈ $${sp.toFixed(2)} this project` : "";
@@ -411,7 +425,8 @@ function render(){
     const ag = $(".angles", art); if (ag) ag.addEventListener("click", async () => {
       await saveNow();
       const n = Number($("#angles").value), m = S.models[$("#model").value];
-      const cost = m.price ? ` · about $${(m.price * (m.mult[$("#resolution").value] || 1) * n).toFixed(2)}` : " · token priced";
+      const per = imgCost(m);
+      const cost = per == null ? " · token priced" : ` · about $${(per * n).toFixed(2)}`;
       if (!await ask(`Make ${n} new angles of ${it.name} ${vlabel(v, sel)} with ${m.label.split(" ·")[0]}${cost}?`, "Angles", "Make angles")) return;
       const r = await api("/api/angles", {name: it.name, file: v.file}); if (r.need_key) { openKey(false); $("#keyerr").textContent = r.error; $("#keyerr").hidden = false; return; } if (r.error) toast(r.error); poll();
     });

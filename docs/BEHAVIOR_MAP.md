@@ -410,17 +410,40 @@ without the provider template hardcoding either one.
 whole tool call when the arg is falsy (e.g. an optional character-reference import), and a list
 item (such as a `medias` entry) can carry `"_when": "<arg>"` to drop just that item instead of the
 whole step — both compose, so an aggregator provider's request only grows an extra reference image
-when one was actually passed to `edit()`.
+when one was actually passed to `edit()`. A dict key whose filled value is exactly Python `None` is
+dropped from its parent dict entirely (not sent as a literal null) — this is how one shared
+operation template serves several underlying models with different parameter schemas: a model's
+catalog entry either omits a template variable it doesn't need (reads back as `None`) or explicitly
+sets it to `None` to suppress a value a shared default would otherwise supply. `edit()`/`video()`
+spread `_model_extra` *after* their own cfg-derived defaults, so a catalog entry's explicit value —
+including `None` — wins over the live UI setting (needed when a control is hidden for that model,
+e.g. Resolution for a model with only one tier, but `cfg` still holds a stale value from whatever
+was last selected).
 
-**Built-in provider:** Higgsfield ships as a real `PROVIDERS` entry (not just documentation) —
-Flare, Sunburst and Seedance 2.5 counterparts to their fal equivalents, all `"recommended": true`
-so they sit next to the fal versions once connected. `docs/provider-example-higgsfield.json`
-mirrors this exact definition; every field was verified live against the real API rather than
-guessed from documentation (Dynamic Client Registration, a real image edit, a real
-image-to-video generation — see its own file for the full verification notes, including what
-hasn't been exercised against the real API yet, like the character-reference path specifically).
-Artlist and Nim.video are meant to join the same way once their connection details are worked
-out; nothing about the engine favors Higgsfield specifically.
+**Built-in provider:** Higgsfield ships as a real `PROVIDERS` entry (not just documentation) — eight
+models paired or added against their fal equivalents, all `"recommended": true` so they sit next to
+the fal versions once connected: GPT Image 2.5 Flare/Sunburst, Nano Banana Pro, Nano Banana 2 and
+Seedance 2.5 in the image/video pickers, plus Kling 3.0 Pro, MiniMax H3 and Veo 3.1 as video-only
+additions with no fal equivalent shipped. `docs/provider-example-higgsfield.json` mirrors the
+original (image + video) definition; every field, including every new model's parameter names,
+option values and per-unit pricing, was verified live against Higgsfield's own `models_explore` and
+cost-preflight tools rather than guessed from documentation (see the file's own verification notes
+for what hasn't been exercised against the real API yet, like the character-reference path
+specifically). Artlist and Nim.video are meant to join the same way once their connection details
+are worked out; nothing about the engine favors Higgsfield specifically.
+
+**GPT Image 2.5 via Higgsfield's Quality selector:** the UI's Quality/Output-size/Resolution
+controls used two CSS classes gating two mutually exclusive `"kind"` values (`gpt`: Quality + Output
+size; `nano`: Resolution only) — no combination existed. GPT Image 2.5 via Higgsfield needs Quality
+*and* Resolution together (it has both parameters, unlike Output-size-in-pixels which is fal-only),
+so Quality and Output size were split into their own classes (`qual`, `size`; Resolution keeps
+`nano`) and a third kind, `gptres`, shows Quality + Resolution while hiding Output size. Its spend
+estimate now reads a verified quality-by-resolution price table (`price_table`, shaped like the
+existing fal-side `GPT_IMAGE_EST`) instead of a flat per-resolution rate, since real cost varies by
+both — confirmed live (e.g. low/1K ≈ $0.008 vs max/4K ≈ $0.50 per image). Nano Banana Pro/2 via
+Higgsfield have no quality parameter at all, so their catalog entries explicitly suppress it
+(`"quality": None`) rather than silently forwarding whatever the (hidden, for their `nano` kind)
+Quality control last held.
 
 **A real, separate bug this surfaced:** `save_config()`'s user-level `config.json` write has no
 locking and blindly overwrites the whole file with whatever (possibly stale) snapshot the calling

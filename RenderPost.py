@@ -53,6 +53,16 @@ APP_VERSION = "1.10.0"
 UPDATE_URL = "https://api.github.com/repos/achristo714/RenderPost/releases/latest"
 DEMO = "--demo" in sys.argv
 
+# GPT Image 2.5 via Higgsfield: verified per-image cost in credits (models_explore get_cost, Sep 2026),
+# converted at ~$0.033/credit on the Ultimate plan — verify at your own plan tier. Flare and Sunburst cost the same.
+GPT_IMAGE_HIGGSFIELD_EST = {
+    "low":    {"1K": 0.0083, "2K": 0.0165, "4K": 0.0248},
+    "medium": {"1K": 0.0165, "2K": 0.0330, "4K": 0.0413},
+    "high":   {"1K": 0.0495, "2K": 0.0908, "4K": 0.1403},
+    "xhigh":  {"1K": 0.0825, "2K": 0.1485, "4K": 0.2310},
+    "max":    {"1K": 0.1650, "2K": 0.2970, "4K": 0.4950},
+}
+
 MODELS = {
     "gpt-image-2.5-flare":    {"label": "GPT Image 2.5 Flare · OpenAI", "endpoint": "openai/gpt-image-2.5/flare/edit", "kind": "gpt", "recommended": True,
                                "hint": "fast tier · strongest at photoreal materials and people · token priced, about $0.01 to $0.40 per image by quality and size"},
@@ -64,12 +74,18 @@ MODELS = {
     "nano-banana-2":   {"label": "Nano Banana 2 · Google, fast", "endpoint": "fal-ai/nano-banana-2/edit", "kind": "nano", "recommended": True,
                         "price": 0.08, "mult": {"1K": 1, "2K": 1.5, "4K": 2},
                         "hint": "fastest and cheapest, good for quick passes · $0.08 per image, 2K x1.5, 4K x2"},
-    "gpt-image-2.5-flare-higgsfield":    {"label": "GPT Image 2.5 Flare · OpenAI", "kind": "nano", "provider": "higgsfield", "recommended": True,
-                        "variant": "flare", "price": 0.017, "mult": {"1K": 1, "2K": 2, "4K": 2.5},
-                        "hint": "same OpenAI model as the fal Flare entry · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first"},
-    "gpt-image-2.5-sunburst-higgsfield": {"label": "GPT Image 2.5 Sunburst · OpenAI", "kind": "nano", "provider": "higgsfield", "recommended": True,
-                        "variant": "sunburst", "price": 0.017, "mult": {"1K": 1, "2K": 2, "4K": 2.5},
-                        "hint": "same OpenAI model as the fal Sunburst entry · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first"},
+    "gpt-image-2.5-flare-higgsfield":    {"label": "GPT Image 2.5 Flare · OpenAI", "kind": "gptres", "provider": "higgsfield", "recommended": True,
+                        "higgsfield_model": "gpt_image_2_5", "variant": "flare", "price_table": GPT_IMAGE_HIGGSFIELD_EST,
+                        "hint": "same OpenAI model as the fal Flare entry · quality and resolution both selectable · runs on your Higgsfield subscription credits instead of a separate fal balance · about $0.008 to $0.50 per image by quality and resolution · connect Higgsfield first"},
+    "gpt-image-2.5-sunburst-higgsfield": {"label": "GPT Image 2.5 Sunburst · OpenAI", "kind": "gptres", "provider": "higgsfield", "recommended": True,
+                        "higgsfield_model": "gpt_image_2_5", "variant": "sunburst", "price_table": GPT_IMAGE_HIGGSFIELD_EST,
+                        "hint": "same OpenAI model as the fal Sunburst entry · quality and resolution both selectable · runs on your Higgsfield subscription credits instead of a separate fal balance · about $0.008 to $0.50 per image by quality and resolution · connect Higgsfield first"},
+    "nano-banana-pro-higgsfield": {"label": "Nano Banana Pro · Google", "kind": "nano", "provider": "higgsfield", "recommended": True,
+                        "higgsfield_model": "nano_banana_pro", "quality": None, "price": 0.066, "mult": {"1K": 1, "2K": 1, "4K": 2},
+                        "hint": "same Google model as the fal Nano Banana Pro entry · deeper reasoning, strong text and diagrams · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first"},
+    "nano-banana-2-higgsfield":   {"label": "Nano Banana 2 · Google, fast", "kind": "nano", "provider": "higgsfield", "recommended": True,
+                        "higgsfield_model": "nano_banana_2", "quality": None, "price": 0.0495, "mult": {"1K": 1, "2K": 1.333, "4K": 2},
+                        "hint": "same Google model as the fal Nano Banana 2 entry · fastest and cheapest of the pair · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first"},
 }
 RES_OPTIONS = {"1K": "1K (about 1024px)", "2K": "2K (about 2048px)", "4K": "4K (about 4096px)"}
 
@@ -92,9 +108,25 @@ VIDEO_MODELS = {
                  "res": {"480p": "480p · iterate here", "720p": "720p · final"},
                  "price": {"480p": 0.2205, "720p": 0.4730}},        # per second, fal Aug 2026
     "seedance-higgsfield": {"label": "Seedance 2.5 · ByteDance", "provider": "higgsfield", "recommended": True,
+                 "higgsfield_model": "seedance_2_5", "mode": "omni_reference", "generate_audio": False,
                  "hint": "same ByteDance model as the fal entry · runs on your Higgsfield subscription credits instead of a separate fal balance · adds 1080p · connect Higgsfield first",
                  "res": {"480p": "480p · iterate here", "720p": "720p", "1080p": "1080p · final"}, "min_duration": 4,
                  "price": {"480p": 0.10, "720p": 0.23, "1080p": 0.40}},   # per second, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
+    "kling3-higgsfield": {"label": "Kling 3.0 Pro · Kuaishou", "provider": "higgsfield", "recommended": True,
+                 "higgsfield_model": "kling3_0", "mode": "pro", "sound": "off", "resolution": None,
+                 "hint": "same Kling 3.0 Pro tier as the fal entry · native audio disabled for predictable pricing · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
+                 "res": None, "min_duration": 4,
+                 "price": {"flat": 0.0495}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
+    "minimax-h3-higgsfield": {"label": "MiniMax H3 · MiniMax", "provider": "higgsfield", "recommended": True,
+                 "higgsfield_model": "minimax_h3", "resolution": "2K",
+                 "hint": "multimodal keyframe/reference video at a fixed 2K, the only resolution this model offers · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
+                 "res": None, "min_duration": 4,
+                 "price": {"flat": 0.066}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
+    "veo3-1-higgsfield": {"label": "Veo 3.1 · Google", "provider": "higgsfield", "recommended": True,
+                 "higgsfield_model": "veo3_1", "quality": "basic", "resolution": None,
+                 "hint": "ultra-realistic cinematic quality, fixed to Higgsfield's basic tier for predictable pricing · only 4s, 6s or 8s clips · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
+                 "res": None, "durations": {"4": "4 s", "6": "6 s", "8": "8 s"}, "min_duration": 4,
+                 "price": {"flat": 0.132}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
 }
 VIDEO_RES = {"480p": "480p · iterate here", "720p": "720p · final"}   # take mode (Seedance)
 # Optional: a JSON at this URL can add or update models without rebuilding the exe.
@@ -162,7 +194,7 @@ PROVIDERS = {"higgsfield": {
             {"tool": "media_import_url", "when": "character_url", "arguments": {"url": "{character_url}", "type": "image"},
              "output_as": "character_media_id", "output_field": "media_id"},
             {"tool": "generate_image_batch", "arguments": {"requests": [{"index": 0, "params": {
-                "model": "gpt_image_2_5", "variant": "{variant}", "quality": "medium",
+                "model": "{higgsfield_model}", "variant": "{variant}", "quality": "{quality}",
                 "resolution": "{resolution}", "aspect_ratio": "{aspect_ratio}", "prompt": "{prompt}",
                 "medias": [{"value": "{media_id}", "role": "image_references"},
                             {"value": "{character_media_id}", "role": "image_references", "_when": "character_media_id"}],
@@ -176,8 +208,9 @@ PROVIDERS = {"higgsfield": {
             {"tool": "media_import_url", "arguments": {"url": "{image_url}", "type": "image"},
              "output_as": "media_id", "output_field": "media_id"},
             {"tool": "generate_video_batch", "arguments": {"requests": [{"index": 0, "params": {
-                "model": "seedance_2_5", "mode": "omni_reference", "duration": "{duration}",
-                "resolution": "{resolution}", "aspect_ratio": "16:9", "generate_audio": False, "prompt": "{prompt}",
+                "model": "{higgsfield_model}", "mode": "{mode}", "sound": "{sound}", "quality": "{quality}",
+                "duration": "{duration}", "resolution": "{resolution}", "aspect_ratio": "16:9",
+                "generate_audio": "{generate_audio}", "prompt": "{prompt}",
                 "medias": [{"value": "{media_id}", "role": "start_image"}], "use_unlim": False}}]},
              "output_as": "job_id", "output_field": "jobs.0.job_id"},
             {"tool": "jobs_wait", "poll": True, "poll_done_field": "all_terminal",
@@ -842,7 +875,14 @@ def _fill_template(node, args):
     dropped from its parent list instead of being filled (the key itself is stripped before
     filling). This is how an optional reference image (e.g. a character reference that may or may
     not be present) gets conditionally included in a fixed-shape list like a "medias" array, without
-    the provider template needing to know whether one was actually passed."""
+    the provider template needing to know whether one was actually passed.
+
+    A key whose filled value is exactly None is dropped from its parent dict entirely, rather than
+    sent as a literal null — this is how one shared operation template (e.g. Higgsfield's "video"
+    operation, reused by several different underlying models with different parameter schemas) omits
+    a parameter a given model doesn't accept: the model's own catalog entry simply doesn't supply
+    that template variable (a missing key reads back as None via args.get), or explicitly overrides
+    it to Python None to suppress a value that would otherwise come from a shared default."""
     if isinstance(node, str):
         if node.startswith("{") and node.endswith("}") and node.count("{") == 1:
             return args.get(node[1:-1])
@@ -855,7 +895,8 @@ def _fill_template(node, args):
             if not args.get(node["_when"]):
                 return _TEMPLATE_SKIP
             node = {k: v for k, v in node.items() if k != "_when"}
-        return {k: _fill_template(v, args) for k, v in node.items()}
+        filled = {k: _fill_template(v, args) for k, v in node.items()}
+        return {k: v for k, v in filled.items() if v is not None}
     if isinstance(node, list):
         filled = (_fill_template(v, args) for v in node)
         return [v for v in filled if v is not _TEMPLATE_SKIP]
@@ -879,7 +920,7 @@ def _dig(obj, path):
 
 
 _MODEL_CATALOG_STRUCTURAL_KEYS = {"label", "kind", "endpoint", "i2v", "provider", "price", "mult",
-                                    "hint", "recommended", "res", "min_duration"}
+                                    "hint", "recommended", "res", "min_duration", "price_table", "durations"}
 
 
 def _model_extra_args(model_entry):
@@ -893,10 +934,10 @@ def _model_extra_args(model_entry):
 async def _mcp_call_once(session, step, args):
     tool_args = _fill_template(step.get("arguments", {}), args)
     result = await session.call_tool(step["tool"], tool_args)
-    if getattr(result, "isError", False):
+    if getattr(result, "is_error", False):
         text = "".join(getattr(c, "text", "") for c in (result.content or []))
         raise RuntimeError(f"MCP tool \"{step['tool']}\" failed: {text[:300] or 'no details'}")
-    data = result.structuredContent
+    data = result.structured_content
     if data is None:
         text = next((c.text for c in (result.content or []) if getattr(c, "text", None)), None)
         try:
@@ -912,6 +953,8 @@ async def _mcp_run_steps(url, headers, steps, args, cancelled):
     extracted output into `args` so later steps can reference it. Returns the last step's
     extracted value. Needs the `mcp` package; imported lazily here so the app runs fine without it
     when no mcp_http provider is connected (same convention as Fal's lazy `import fal_client`).
+    Auth headers go on a dedicated httpx2 client passed to streamable_http_client — that function
+    takes an http_client, not a headers dict, so this app is the one responsible for its lifecycle.
 
     A step with "poll": true (e.g. a long-poll status/wait tool like Higgsfield's jobs_wait, which
     only blocks up to ~15s per call and expects to be called again until done) repeats the SAME
@@ -919,34 +962,38 @@ async def _mcp_run_steps(url, headers, steps, args, cancelled):
     attempts — for however long the response's own "poll_delay_field" says to wait (falling back to
     a fixed few seconds), up to "poll_max_attempts" (default 60) before giving up."""
     import mcp
-    from mcp.client.streamable_http import streamablehttp_client
+    import httpx2
+    from mcp.client.streamable_http import streamable_http_client
     out = None
-    async with streamablehttp_client(url, headers=headers) as (read, write, _get_session_id):
-        async with mcp.ClientSession(read, write) as session:
-            await session.initialize()
-            for step in steps:
-                if step.get("when") and not args.get(step["when"]):
-                    continue   # optional step (e.g. importing a character reference that wasn't provided) — skipped entirely
-                if step.get("poll"):
-                    done_field, done_value = step.get("poll_done_field", "done"), step.get("poll_done_value", True)
-                    for _attempt in range(step.get("poll_max_attempts", 60)):
-                        if cancelled():
-                            raise Cancelled()
-                        data = await _mcp_call_once(session, step, args)
-                        if _dig(data, done_field) == done_value:
-                            break
-                        delay = _dig(data, step.get("poll_delay_field", "")) or step.get("poll_delay", 3)
-                        await asyncio.sleep(float(delay))
-                    else:
-                        raise RuntimeError(f"MCP tool \"{step['tool']}\" never reported done after {step.get('poll_max_attempts', 60)} attempts.")
-                else:
+    async with (
+        httpx2.AsyncClient(headers=headers, timeout=60) as http_client,
+        streamable_http_client(url, http_client=http_client) as (read, write),
+        mcp.ClientSession(read, write) as session,
+    ):
+        await session.initialize()
+        for step in steps:
+            if step.get("when") and not args.get(step["when"]):
+                continue   # optional step (e.g. importing a character reference that wasn't provided) — skipped entirely
+            if step.get("poll"):
+                done_field, done_value = step.get("poll_done_field", "done"), step.get("poll_done_value", True)
+                for _attempt in range(step.get("poll_max_attempts", 60)):
                     if cancelled():
                         raise Cancelled()
                     data = await _mcp_call_once(session, step, args)
-                field = step.get("output_field")
-                out = _dig(data, field) if field else data
-                if step.get("output_as"):
-                    args[step["output_as"]] = out
+                    if _dig(data, done_field) == done_value:
+                        break
+                    delay = _dig(data, step.get("poll_delay_field", "")) or step.get("poll_delay", 3)
+                    await asyncio.sleep(float(delay))
+                else:
+                    raise RuntimeError(f"MCP tool \"{step['tool']}\" never reported done after {step.get('poll_max_attempts', 60)} attempts.")
+            else:
+                if cancelled():
+                    raise Cancelled()
+                data = await _mcp_call_once(session, step, args)
+            field = step.get("output_field")
+            out = _dig(data, field) if field else data
+            if step.get("output_as"):
+                args[step["output_as"]] = out
     return out
 
 
@@ -1066,18 +1113,24 @@ class AggregatorProvider:
     def edit(self, image_url, prompt, cfg, src_dims, cancelled=lambda: False, extra_urls=()):
         w, h = src_dims
         g = math.gcd(int(w), int(h)) or 1
-        args = {**cfg.get("_model_extra", {}),
-                "prompt": prompt, "image_url": image_url, "image_urls": [image_url] + list(extra_urls),
+        # _model_extra is spread last so a catalog entry's own declared value (including an explicit
+        # None, dropped by _fill_template) can override a live-cfg default below it — e.g. suppressing
+        # "quality" for a model that has no such parameter, regardless of what the UI's quality
+        # selector currently shows (it's hidden, but cfg still holds its last value).
+        args = {"prompt": prompt, "image_url": image_url, "image_urls": [image_url] + list(extra_urls),
                 "character_url": extra_urls[0] if extra_urls else "",
                 "width": w, "height": h, "aspect_ratio": f"{int(w)//g}:{int(h)//g}",
-                "resolution": str(cfg.get("resolution", "")).lower()}
+                "resolution": str(cfg.get("resolution", "")).lower(), "quality": cfg.get("quality", ""),
+                **cfg.get("_model_extra", {})}
         return [self._call("image", args, cancelled)]
 
     def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False):
-        args = {**cfg.get("_model_extra", {}),
-                "prompt": prompt, "image_url": image_urls[0], "image_urls": list(image_urls),
+        # See edit()'s comment: _model_extra spread last lets a catalog entry fix or suppress a
+        # parameter (e.g. a model with no resolution control) regardless of the live cfg default.
+        args = {"prompt": prompt, "image_url": image_urls[0], "image_urls": list(image_urls),
                 "duration": int(cfg.get("take_duration") if take else cfg.get("video_duration") or 0),
-                "resolution": cfg.get("video_res", "")}
+                "resolution": cfg.get("video_res", ""),
+                **cfg.get("_model_extra", {})}
         return self._call("video", args, cancelled)
 
     def download(self, url, out_path):
@@ -1346,7 +1399,7 @@ class State:
                 gen.download(urls[0], tmp)
                 shutil.move(str(tmp), str(out))
                 made.append({"file": out.name, "prompt": ptxt, "out_size": image_dims(out), "seconds": round(time.time() - t0),
-                             "model": cfg["model"], "quality": cfg["quality"] if MODELS[cfg["model"]]["kind"] == "gpt" else cfg["resolution"],
+                             "model": cfg["model"], "quality": cfg["quality"] if MODELS[cfg["model"]]["kind"] == "gpt" else (f'{cfg["quality"]} · {cfg["resolution"]}' if MODELS[cfg["model"]]["kind"] == "gptres" else cfg["resolution"]),
                              "made": time.strftime("%Y-%m-%d %H:%M"), "pick": False, "angle": True, "from": file})
                 with self.lock:
                     it["versions"] = it["versions"] + [made[-1]]
@@ -1434,6 +1487,9 @@ class State:
 
     def image_cost(self, cfg, n=1):
         m = MODELS.get(cfg["model"], {})
+        if m.get("price_table"):
+            q = m["price_table"].get(cfg.get("quality"), {})
+            return q.get(cfg.get("resolution"), 0) * n
         if m.get("price"):
             return m["price"] * (m.get("mult", {}).get(cfg.get("resolution"), 1)) * n
         q = GPT_IMAGE_EST.get(cfg.get("quality"), GPT_IMAGE_EST["high"])
@@ -1506,7 +1562,7 @@ class State:
                 shutil.move(str(tmp), str(out))
                 made.append({"file": out.name, "prompt": prompt, "out_size": image_dims(out),
                              "seconds": round(time.time() - t0), "model": cfg["model"],
-                             "quality": cfg["quality"] if MODELS[cfg["model"]]["kind"] == "gpt" else cfg["resolution"],
+                             "quality": cfg["quality"] if MODELS[cfg["model"]]["kind"] == "gpt" else (f'{cfg["quality"]} · {cfg["resolution"]}' if MODELS[cfg["model"]]["kind"] == "gptres" else cfg["resolution"]),
                              "made": time.strftime("%Y-%m-%d %H:%M"), "pick": False, "character": bool(char)})
             with self.lock:
                 it["versions"] = it["versions"] + made
@@ -1613,7 +1669,7 @@ class Handler(BaseHTTPRequestHandler):
                 "version": APP_VERSION, "latest": LATEST, "catalog": {**CATALOG_STATUS, "url": cfg.get("catalog_url", "") or MODEL_CATALOG_URL},
                 "config": {k: v for k, v in cfg.items() if k not in ("fal_key", "providers", "custom_providers")},
                 "size_options": SIZE_OPTIONS, "quality_options": QUALITY_OPTIONS,
-                "models": {k: {"label": v["label"], "kind": v["kind"], "hint": v["hint"], "price": v.get("price"), "mult": v.get("mult"), "recommended": v.get("recommended", False), "provider": v.get("provider", "fal")} for k, v in MODELS.items()},
+                "models": {k: {"label": v["label"], "kind": v["kind"], "hint": v["hint"], "price": v.get("price"), "mult": v.get("mult"), "price_table": v.get("price_table"), "recommended": v.get("recommended", False), "provider": v.get("provider", "fal")} for k, v in MODELS.items()},
                 "res_options": RES_OPTIONS, "variation_options": VARIATION_OPTIONS, "angle_options": ANGLE_OPTIONS,
                 "picks": sum(1 for it in STATE.snapshot() for v in it["versions"] if v.get("pick")),
                 "spend": float(cfg.get("spend") or 0), "spend_alert": float(cfg.get("spend_alert") or 10),
@@ -1623,7 +1679,7 @@ class Handler(BaseHTTPRequestHandler):
                                     "auth_type": (v.get("auth") or {}).get("type"),
                                     "connected": bool(cfg.get("providers", {}).get(k))}
                               for k, v in PROVIDERS.items()},
-                "video": {"res": VIDEO_RES, "models": {k: {"label": v["label"], "hint": v["hint"], "price": v["price"], "res": v.get("res"), "recommended": v.get("recommended", False), "min_duration": v.get("min_duration", 1), "provider": v.get("provider", "fal")} for k, v in VIDEO_MODELS.items()},
+                "video": {"res": VIDEO_RES, "models": {k: {"label": v["label"], "hint": v["hint"], "price": v["price"], "res": v.get("res"), "durations": v.get("durations"), "recommended": v.get("recommended", False), "min_duration": v.get("min_duration", 1), "provider": v.get("provider", "fal")} for k, v in VIDEO_MODELS.items()},
                           "durations": VIDEO_DURATIONS,
                           "take_durations": TAKE_DURATIONS, "ffmpeg": bool(ffmpeg_exe()),
                           "music": sorted(p.name for p in STATE.folder.iterdir() if p.is_file() and p.suffix.lower() in MUSIC_EXT)},
@@ -1823,7 +1879,6 @@ class Handler(BaseHTTPRequestHandler):
             STATE.cancel(body.get("name"))
             return self._send(200, {"ok": True})
         if path == "/api/add_images":
-            import base64
             added = 0
             for f in body.get("files") or []:
                 name = Path(str(f.get("name") or "")).name
@@ -1843,7 +1898,6 @@ class Handler(BaseHTTPRequestHandler):
             STATE.scan()
             return self._send(200, {"ok": True, "added": added})
         if path == "/api/character/upload":
-            import base64
             data = body.get("data") or ""
             if "," in data:
                 data = data.split(",", 1)[1]
@@ -2256,13 +2310,13 @@ def load_catalog():
             # A model dispatches to fal via "endpoint"/"i2v", or to an aggregator via "provider" —
             # either is enough to be usable; "kind" (image) is always required, it drives the UI controls.
             for k, v in (d.get("image") or {}).items():
-                if isinstance(v, dict) and v.get("kind") in ("gpt", "nano") and (v.get("endpoint") or v.get("provider")):
+                if isinstance(v, dict) and v.get("kind") in ("gpt", "nano", "gptres") and (v.get("endpoint") or v.get("provider")):
                     MODELS[k] = {**MODELS.get(k, {}), **v}
             n = 0
             for k, v in (d.get("video") or {}).items():
                 if isinstance(v, dict) and (v.get("i2v") or v.get("provider")):
                     VIDEO_MODELS[k] = {**VIDEO_MODELS.get(k, {}), **v}; n += 1
-            n += sum(1 for v in (d.get("image") or {}).values() if isinstance(v, dict) and v.get("kind") in ("gpt", "nano"))
+            n += sum(1 for v in (d.get("image") or {}).values() if isinstance(v, dict) and v.get("kind") in ("gpt", "nano", "gptres"))
             _merge_providers(d.get("providers"))
             CATALOG_STATUS.update(ok=True, note=f"{n} model entr{'y' if n == 1 else 'ies'} loaded")
         except Exception as e:
