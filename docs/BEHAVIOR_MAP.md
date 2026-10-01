@@ -433,19 +433,25 @@ than guessed from documentation. Artlist and Nim.video are meant to join the sam
 connection details are worked out; nothing about the engine favors Higgsfield specifically.
 
 **Character reference at clip-generation level (Seedance 2.5 and MiniMax H3 via Higgsfield only):**
-when a clip is made from a picked version that was itself generated with the character checkbox on
-(`it["versions"][...]["character"]`), and the clip's video model is one of
-`CHAR_REFERENCE_VIDEO_MODELS` (`seedance-higgsfield`, `minimax-h3-higgsfield`), `_clip_job` attaches
-the character image as a second reference alongside the start frame — start frame first
+an explicit "Reference character" checkbox on the clip card itself — shown only when the clip's
+video model is one of `CHAR_REFERENCE_VIDEO_MODELS` (`seedance-higgsfield`, `minimax-h3-higgsfield`)
+and a character image is present (`S.character.file`). Deliberately independent of whether the
+picked frame's own version was generated with character reference on — an earlier version of this
+feature inferred presence from that version history, which Filip found too indirect and which broke
+for an image generated before that flag existed on it even though a character was present; a plain
+explicit checkbox replaced it. The checkbox's state lives on the clip object itself (`c["char_ref"]`,
+defaults `False`), toggled via `POST /api/video/char_ref` (`id`, `on`), independent of the clip's
+prompt/status so toggling it doesn't require rewriting the motion prompt. When on, `_clip_job`
+attaches the character image as a second reference alongside the start frame — start frame first
 (`role: "start_image"`), character second (`role: "image_references"`), the input shape Filip
 verified working directly in Higgsfield's own web UI. Implemented the same way the image operation
 already handles an optional character reference: a second `media_import_url` step gated by
 `"when": "character_url"`, and a second `medias` entry gated by `"_when": "character_media_id"` —
-both silently no-op when no character is active, or for any other video model, since only
-`_clip_job` decides whether to pass `extra_urls` at all (the shared Higgsfield video template never
-branches on which model is selected). Take mode is unaffected — it already attaches the character
-image its own way, via `cfg["take_character"]`, appended directly into the source `image_urls` list
-rather than as a separate reference parameter.
+both silently no-op when the checkbox is off, or for any other video model, since only `_clip_job`
+decides whether to pass `extra_urls` at all (the shared Higgsfield video template never branches on
+which model is selected). Take mode is unaffected — it already attaches the character image its own
+way, via `cfg["take_character"]`, appended directly into the source `image_urls` list rather than as
+a separate reference parameter.
 
 **GPT Image 2.5 via Higgsfield's Quality selector:** the UI's Quality/Output-size/Resolution
 controls used two CSS classes gating two mutually exclusive `"kind"` values (`gpt`: Quality + Output

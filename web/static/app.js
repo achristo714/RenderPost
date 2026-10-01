@@ -548,12 +548,14 @@ function renderClipCards(list, wrap, els, withStitchBox){
     const shots = (c.kind === "clip" && Number(c.shots || 1) > 1 ? ` · ${c.shots} shots` : "") + (c.vmodel && c.kind === "clip" ? " · " + (((S.video.models[c.vmodel] || {}).label || c.vmodel).split(" ·")[0]) : "");
     const dims = c.out_size ? ` · ${c.out_size[0]}×${c.out_size[1]}` : (c.resolution ? ` · ${c.resolution}` : "");
     const state = busyItem ? `<i class="dot live"></i>${esc(c.step)}` : c.status === "done" ? `<i class="dot ok"></i>${c.duration}s${dims}${shots}` : c.status === "failed" ? `<i class="dot bad"></i>failed` : `<i class="dot warn"></i>prompt ready · not sent`;
+    const canCharRef = c.kind === "clip" && (S.video.models[c.vmodel] || {}).char_ref && S.character && S.character.file;
     el.innerHTML = `
       <div class="media">${c.file ? `<video src="/vid/${encodeURIComponent(c.file)}" ${src ? `poster="${frameSrc(src)}"` : ""} controls preload="metadata" loop muted></video>` : src ? `<img src="${frameSrc(src)}" alt="">` : ""}
         ${withStitchBox && c.status === "done" ? `<label class="inreel ${stitchSel.has(c.id) ? "on" : ""}" title="Include this clip in the reel. Order is the order you tick."><input type="checkbox" class="stitchsel" ${stitchSel.has(c.id) ? "checked" : ""}><span>${stitchSel.has(c.id) ? `<b class="ord">${[...stitchSel].indexOf(c.id) + 1}</b> In reel` : "Add to reel"}</span></label>` : ""}
         ${busyItem ? `<div class="working"><span><i class="dot live"></i>${esc(c.step)}<button class="btn quiet vcancel" type="button">Cancel</button></span></div>` : ""}</div>
       <div class="body">
         <div class="top"><label>${title}</label><span>${state}</span></div>
+        ${canCharRef ? `<label class="showall" style="float:none"><input type="checkbox" class="charref" ${c.char_ref ? "checked" : ""}${busyItem ? " disabled" : ""}> Reference character · start frame + character as second reference</label>` : ""}
         ${c.error ? `<div class="err">${esc(c.error)}</div>` : ""}
         ${c.kind === "reel" ? `<div class="hint" style="font-family:var(--em-font-mono);font-size:11px;color:var(--em-ink-dim)">${esc(c.prompt)}</div>` : `<textarea spellcheck="false" placeholder="Motion prompt appears here once written.">${esc(draft ?? c.prompt)}</textarea>`}
         <div class="actions"><span class="r">${c.file ? `<a class="btn quiet" href="/vid/${encodeURIComponent(c.file)}" target="_blank" rel="noopener">Open</a><a class="btn quiet" href="/vid/${encodeURIComponent(c.file)}" download="${esc(c.file)}">Download</a>` : ""}${!busyItem ? `<button class="btn quiet vremove" type="button" title="Remove from this list (keeps the file)">Remove</button>` : ""}</span>
@@ -561,6 +563,7 @@ function renderClipCards(list, wrap, els, withStitchBox){
       </div>`;
     const ta = el.querySelector("textarea"); if (ta) { const fit = () => { ta.style.height = "auto"; ta.style.height = Math.max(64, ta.scrollHeight + 2) + "px"; }; ta.addEventListener("input", fit); requestAnimationFrame(fit); }
     const cb = el.querySelector(".stitchsel"); if (cb) cb.addEventListener("change", () => { cb.checked ? stitchSel.add(c.id) : stitchSel.delete(c.id); el.dataset.sig = ""; renderVideo(); });
+    const cr = el.querySelector(".charref"); if (cr) cr.addEventListener("change", () => api("/api/video/char_ref", {id: c.id, on: cr.checked}));
     const vc = el.querySelector(".vcancel"); if (vc) vc.addEventListener("click", async () => { vc.disabled = true; await api("/api/video/cancel", {id: c.id}); poll(); });
     const rm = el.querySelector(".vremove"); if (rm) rm.addEventListener("click", async () => { await api("/api/video/remove", {id: c.id}); el.remove(); delete els[c.id]; stitchSel.delete(c.id); poll(); });
     const mk = el.querySelector(".vmake1"); if (mk) mk.addEventListener("click", async () => { await saveNow(); const r = await api("/api/video/make", {ids: [c.id], prompts: {[c.id]: el.querySelector("textarea").value}}); if (r.error) toast(r.error); poll(); });
