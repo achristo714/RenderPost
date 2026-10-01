@@ -1317,15 +1317,22 @@ class State:
         self.video_dir.mkdir(exist_ok=True)
         (self.video_dir / "clips.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
 
+    def _clip_cfg_fields(self, kind, cfg):
+        """resolution/vmodel/duration/shots/char_ref derived from the current settings for a clip
+        of this kind — shared by new_clip() and by /api/video/prompts' draft_for() reuse path, so a
+        reused draft can't keep a stale model/resolution from whenever it was first created (e.g.
+        a model that's since been removed from the catalog entirely)."""
+        return {"resolution": ("1080p" if cfg.get("video_model") == "kling" else cfg["video_res"]) if kind == "clip" else cfg["video_res"],
+                "vmodel": None if kind == "reel" else ("seedance" if kind == "take" else cfg.get("video_model", "seedance")),
+                "duration": cfg["take_duration"] if kind == "take" else cfg["video_duration"],
+                "shots": cfg.get("shots", "1") if kind == "clip" else None,
+                "char_ref": False}
+
     def new_clip(self, kind, sources, cfg):
         cid = f"{int(time.time()*1000)}{len(self.clips):02d}"
         c = {"id": cid, "kind": kind, "sources": sources, "prompt": "", "file": None,
              "status": "queued", "step": "waiting", "error": None, "seconds": None, "made": None,
-             "resolution": ("1080p" if cfg.get("video_model") == "kling" else cfg["video_res"]) if kind == "clip" else cfg["video_res"],
-             "vmodel": None if kind == "reel" else ("seedance" if kind == "take" else cfg.get("video_model", "seedance")),
-             "duration": cfg["take_duration"] if kind == "take" else cfg["video_duration"],
-             "shots": cfg.get("shots", "1") if kind == "clip" else None,
-             "char_ref": False}
+             **self._clip_cfg_fields(kind, cfg)}
         with self.lock:
             self.clips.append(c)
         return c
@@ -1401,6 +1408,12 @@ class State:
             self.clip_set(cid, prompt=prompt, step=f"generating {c['duration']}s" + ("" if c.get("vmodel") == "kling" else f" at {c['resolution']}"),
                           duration=cfg["take_duration"] if take else cfg["video_duration"])
             vmodel_entry = VIDEO_MODELS.get(c.get("vmodel") or "seedance")
+            if vmodel_entry is None:
+                # A clip resubmitted directly (Make again) can carry a vmodel id that's since been
+                # removed from the catalog entirely (not just changed from the current selector) —
+                # generator_for(None) would silently fall through to fal with a mismatched cfg and
+                # crash on a fal-only field. Fail clearly instead.
+                raise RuntimeError(f"This clip's video model (\"{c.get('vmodel')}\") is no longer available. Remove this clip and make a new one.")
             gen = self.generator_for(vmodel_entry)
             clip_char_url = self.character_url() if (not take and with_char and c.get("vmodel") in CHAR_REFERENCE_VIDEO_MODELS) else None
             url = gen.video(prompt, urls, {**cfg, "_model_extra": _model_extra_args(vmodel_entry)}, take, cancelled,
@@ -2189,13 +2202,13 @@ class Handler(BaseHTTPRequestHandler):
             if body.get("mode") == "take":
                 c = draft_for("take", picks) or STATE.new_clip("take", picks, cfg)
                 with STATE.lock:
-                    c.update(status="queued", step="waiting", error=None, _cancel=False, sources=picks)
+                    c.update(status="queued", step="waiting", error=None, _cancel=False, sources=picks, **STATE._clip_cfg_fields("take", cfg))
                 made.append(c["id"]); STATE.pool.submit(STATE._clip_job, c["id"], stage, None, cfg)
             else:
                 for pk in picks:
                     c = draft_for("clip", [pk]) or STATE.new_clip("clip", [pk], cfg)
                     with STATE.lock:
-                        c.update(status="queued", step="waiting", error=None, _cancel=False)
+                        c.update(status="queued", step="waiting", error=None, _cancel=False, **STATE._clip_cfg_fields("clip", cfg))
                     made.append(c["id"]); STATE.pool.submit(STATE._clip_job, c["id"], stage, None, cfg)
             STATE.save_clips()
             return self._send(200, {"ok": True, "ids": made})
