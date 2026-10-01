@@ -130,33 +130,6 @@ VIDEO_MODELS = {
                  "res": {"basic": "Basic · iterate here", "high": "High", "ultra": "Ultra · final"},
                  "durations": {"4": "4 s", "6": "6 s", "8": "8 s"}, "min_duration": 4,
                  "price": {"basic": 0.132, "high": 0.132, "ultra": 0.297}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
-    "gemini-omni-flash-higgsfield": {"label": "Gemini Omni Flash 1.1 · Google", "provider": "higgsfield", "recommended": True,
-                 "higgsfield_model": "gemini_omni_flash_1_1", "mode": "image-to-video",
-                 "hint": "native audio, up to 4K, keyframe-aware · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
-                 "res": {"360p": "360p · iterate here", "720p": "720p", "1080p": "1080p", "4k": "4K · final"},
-                 "durations": {"4": "4 s", "5": "5 s", "6": "6 s", "8": "8 s", "10": "10 s"}, "min_duration": 4,
-                 "price": {"360p": 0.033, "720p": 0.099, "1080p": 0.1485, "4k": 0.297}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
-    "grok-video-15-higgsfield": {"label": "Grok Imagine 1.5 · xAI", "provider": "higgsfield", "recommended": True,
-                 "higgsfield_model": "grok_video_v15",
-                 "hint": "multimodal, start image plus audio references · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
-                 "res": {"480p": "480p · iterate here", "720p": "720p", "1080p": "1080p · final"}, "min_duration": 4,
-                 "price": {"480p": 0.0825, "720p": 0.1485, "1080p": 0.264}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
-    "happyhorse-higgsfield": {"label": "Happy Horse Video · Happy Horse", "provider": "higgsfield", "recommended": True,
-                 "higgsfield_model": "happy_horse_video",
-                 "hint": "text/image-to-video, single start frame · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
-                 "res": {"720p": "720p · iterate here", "1080p": "1080p · final"}, "min_duration": 4,
-                 "price": {"720p": 0.0825, "1080p": 0.1485}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
-    "minimax-hailuo-23-higgsfield": {"label": "MiniMax Hailuo 2.3 · MiniMax", "provider": "higgsfield", "recommended": True,
-                 "higgsfield_model": "minimax_hailuo", "variant": "minimax-2.3",
-                 "hint": "natural physics and facial emotion · only 6s clips — Higgsfield's own API rejects 1080p at 10s for this variant, so only the duration verified to work at every resolution is offered · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
-                 "res": {"768": "768 · iterate here", "1080": "1080 · final"},
-                 "durations": {"6": "6 s"}, "min_duration": 6,
-                 "price": {"768": 0.033, "1080": 0.055}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
-    "flux3-video-higgsfield": {"label": "FLUX.3 Video · Black Forest Labs", "provider": "higgsfield", "recommended": True,
-                 "higgsfield_model": "flux_3_video",
-                 "hint": "multi-frame image-to-video with synchronized audio · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
-                 "res": {"720p": "720p · iterate here", "1080p": "1080p · final"}, "min_duration": 5,
-                 "price": {"720p": 0.1815, "1080p": 0.297}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
 }
 VIDEO_RES = {"480p": "480p · iterate here", "720p": "720p · final"}   # take mode (Seedance)
 # Optional: a JSON at this URL can add or update models without rebuilding the exe.
@@ -968,7 +941,6 @@ _PRESET_DECLINE_RE = re.compile(r"declined_preset_id=([0-9a-fA-F-]{36})")
 
 async def _mcp_call_once(session, step, args):
     tool_args = _fill_template(step.get("arguments", {}), args)
-    print(f"MCP call: {step['tool']} <- {json.dumps(tool_args, default=str)}", flush=True)
     result = await session.call_tool(step["tool"], tool_args)
     if getattr(result, "is_error", False):
         text = "".join(getattr(c, "text", "") for c in (result.content or []))
@@ -1008,9 +980,7 @@ async def _mcp_run_steps(url, headers, steps, args, cancelled):
         streamable_http_client(url, http_client=http_client) as (read, write),
         mcp.ClientSession(read, write, client_info=mcp.types.Implementation(name=APP_NAME, version=APP_VERSION)) as session,
     ):
-        print(f"MCP session opened, initializing... headers={list(headers.keys())}", flush=True)
         await session.initialize()
-        print("MCP initialize OK", flush=True)
         for step in steps:
             if step.get("when") and not args.get(step["when"]):
                 continue   # optional step (e.g. importing a character reference that wasn't provided) — skipped entirely
