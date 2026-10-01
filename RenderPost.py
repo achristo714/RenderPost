@@ -1324,7 +1324,8 @@ class State:
              "resolution": ("1080p" if cfg.get("video_model") == "kling" else cfg["video_res"]) if kind == "clip" else cfg["video_res"],
              "vmodel": None if kind == "reel" else ("seedance" if kind == "take" else cfg.get("video_model", "seedance")),
              "duration": cfg["take_duration"] if kind == "take" else cfg["video_duration"],
-             "shots": cfg.get("shots", "1") if kind == "clip" else None}
+             "shots": cfg.get("shots", "1") if kind == "clip" else None,
+             "char_ref": False}
         with self.lock:
             self.clips.append(c)
         return c
@@ -1378,9 +1379,11 @@ class State:
             with_char = False
             if take and cfg.get("take_character") and self.character_path():
                 urls = urls + [self.character_url()]; with_char = True
-            elif not take:
-                src0 = c["sources"][0]; it0 = self.items.get(src0["name"], {})
-                with_char = any(v.get("character") for v in it0.get("versions", []) if v["file"] == src0["file"])
+            elif not take and c.get("char_ref") and self.character_path():
+                # Explicit per-clip "Reference character" checkbox (Seedance 2.5 / MiniMax H3 via
+                # Higgsfield only) — independent of whether the picked frame was itself generated
+                # with character reference; simpler and more predictable than inferring from that.
+                with_char = True
             if cancelled():
                 raise Cancelled()
             if stage in ("prompt", "full") and not forced_prompt:
@@ -1742,7 +1745,7 @@ class Handler(BaseHTTPRequestHandler):
                                     "auth_type": (v.get("auth") or {}).get("type"),
                                     "connected": bool(cfg.get("providers", {}).get(k))}
                               for k, v in PROVIDERS.items()},
-                "video": {"res": VIDEO_RES, "models": {k: {"label": v["label"], "hint": v["hint"], "price": v["price"], "res": v.get("res"), "durations": v.get("durations"), "recommended": v.get("recommended", False), "min_duration": v.get("min_duration", 1), "provider": v.get("provider", "fal")} for k, v in VIDEO_MODELS.items()},
+                "video": {"res": VIDEO_RES, "models": {k: {"label": v["label"], "hint": v["hint"], "price": v["price"], "res": v.get("res"), "durations": v.get("durations"), "recommended": v.get("recommended", False), "min_duration": v.get("min_duration", 1), "provider": v.get("provider", "fal"), "char_ref": k in CHAR_REFERENCE_VIDEO_MODELS} for k, v in VIDEO_MODELS.items()},
                           "durations": VIDEO_DURATIONS,
                           "take_durations": TAKE_DURATIONS, "ffmpeg": bool(ffmpeg_exe()),
                           "music": sorted(p.name for p in STATE.folder.iterdir() if p.is_file() and p.suffix.lower() in MUSIC_EXT)},
@@ -1826,6 +1829,12 @@ class Handler(BaseHTTPRequestHandler):
                 for c in STATE.clips:
                     if (cid is None or c["id"] == cid) and c["status"] in ("queued", "working"):
                         c["_cancel"] = True
+            return self._send(200, {"ok": True})
+        if path == "/api/video/char_ref":
+            # "Reference character" checkbox on a clip card (Seedance 2.5 / MiniMax H3 via Higgsfield
+            # only) — explicit per-clip control, independent of how the picked frame was generated.
+            STATE.clip_set(body.get("id"), char_ref=bool(body.get("on")))
+            STATE.save_clips()
             return self._send(200, {"ok": True})
         if path == "/api/export_images":
             rows = []
