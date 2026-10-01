@@ -131,6 +131,10 @@ VIDEO_MODELS = {
                  "durations": {"4": "4 s", "6": "6 s", "8": "8 s"}, "min_duration": 4,
                  "price": {"basic": 0.132, "high": 0.132, "ultra": 0.297}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
 }
+# These two Higgsfield video models accept a character image as a second reference alongside the
+# start frame (verified working in Higgsfield's own web UI); others ignore it. Clip-generation only
+# (not takes, which already have their own character attachment via cfg["take_character"]).
+CHAR_REFERENCE_VIDEO_MODELS = ("seedance-higgsfield", "minimax-h3-higgsfield")
 VIDEO_RES = {"480p": "480p · iterate here", "720p": "720p · final"}   # take mode (Seedance)
 # Optional: a JSON at this URL can add or update models without rebuilding the exe.
 # Shape: {"image": {<key>: {...same fields as MODELS...}}, "video": {<key>: {...same fields as VIDEO_MODELS...}},
@@ -211,12 +215,16 @@ PROVIDERS = {"higgsfield": {
         "video": {"steps": [
             {"tool": "media_import_url", "arguments": {"url": "{image_url}", "type": "image"},
              "output_as": "media_id", "output_field": "media_id"},
+            {"tool": "media_import_url", "when": "character_url", "arguments": {"url": "{character_url}", "type": "image"},
+             "output_as": "character_media_id", "output_field": "media_id"},
             {"tool": "generate_video_batch", "arguments": {"requests": [{"index": 0, "params": {
                 "model": "{higgsfield_model}", "mode": "{mode}", "sound": "{sound}", "quality": "{quality}",
                 "duration": "{duration}", "resolution": "{resolution}", "aspect_ratio": "16:9",
                 "generate_audio": "{generate_audio}", "prompt": "{prompt}",
                 "declined_preset_id": "{declined_preset_id}",
-                "medias": [{"value": "{media_id}", "role": "start_image"}], "use_unlim": False}}]},
+                "medias": [{"value": "{media_id}", "role": "start_image"},
+                            {"value": "{character_media_id}", "role": "image_references", "_when": "character_media_id"}],
+                "use_unlim": False}}]},
              "output_as": "job_id", "output_field": "jobs.0.job_id"},
             {"tool": "jobs_wait", "poll": True, "poll_done_field": "all_terminal",
              "poll_delay_field": "poll_after_seconds", "poll_delay": 5,
@@ -662,7 +670,7 @@ class Fal:
                 last = e
         raise RuntimeError(f"Could not write a motion prompt ({last})")
 
-    def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False):
+    def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False, extra_urls=()):
         audio = bool(cfg.get("video_audio", True))
         if take:
             args = {"prompt": prompt, "image_urls": image_urls, "resolution": cfg["video_res"],
@@ -820,7 +828,7 @@ class DemoFal:
             return " ".join(f"Glide through the space in [Image{i+1}]," for i in range(len(image_urls))) + " one continuous steadicam take, architecture unchanged." + (f" Client notes: {notes.strip()}" if notes.strip() else "")
         return "Slow push-in toward the far wall, curtains stirring, two people talking at a table, warm lamps flicker softly. Architecture, materials and lighting stay exactly as in the still." + (f" Client notes: {notes.strip()}" if notes.strip() else "")
 
-    def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False):
+    def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False, extra_urls=()):
         for _ in range(30):
             if cancelled():
                 raise Cancelled()
@@ -1171,7 +1179,7 @@ class AggregatorProvider:
                 **cfg.get("_model_extra", {})}
         return [self._call("image", args, cancelled)]
 
-    def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False):
+    def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False, extra_urls=()):
         # See edit()'s comment: _model_extra spread last lets a catalog entry fix or suppress a
         # parameter (e.g. a model with no resolution control) regardless of the live cfg default.
         # A model whose resolution-equivalent tier isn't literally called "resolution" at the API
@@ -1182,6 +1190,7 @@ class AggregatorProvider:
         args = {"prompt": prompt, "image_url": image_urls[0], "image_urls": list(image_urls),
                 "duration": int(cfg.get("take_duration") if take else cfg.get("video_duration") or 0),
                 res_key: cfg.get("video_res", ""),
+                "character_url": extra_urls[0] if extra_urls else "",
                 **extra}
         return self._call("video", args, cancelled)
 
@@ -1390,7 +1399,9 @@ class State:
                           duration=cfg["take_duration"] if take else cfg["video_duration"])
             vmodel_entry = VIDEO_MODELS.get(c.get("vmodel") or "seedance")
             gen = self.generator_for(vmodel_entry)
-            url = gen.video(prompt, urls, {**cfg, "_model_extra": _model_extra_args(vmodel_entry)}, take, cancelled)
+            clip_char_url = self.character_url() if (not take and with_char and c.get("vmodel") in CHAR_REFERENCE_VIDEO_MODELS) else None
+            url = gen.video(prompt, urls, {**cfg, "_model_extra": _model_extra_args(vmodel_entry)}, take, cancelled,
+                             extra_urls=[clip_char_url] if clip_char_url else ())
             self.clip_set(cid, step="downloading")
             self.video_dir.mkdir(exist_ok=True)
             base = "take" if take else Path(c["sources"][0]["file"]).stem

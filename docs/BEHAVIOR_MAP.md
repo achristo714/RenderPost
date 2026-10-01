@@ -423,14 +423,29 @@ was last selected).
 **Built-in provider:** Higgsfield ships as a real `PROVIDERS` entry (not just documentation) — eight
 models paired or added against their fal equivalents, all `"recommended": true` so they sit next to
 the fal versions once connected: GPT Image 2.5 Flare/Sunburst, Nano Banana Pro, Nano Banana 2 and
-Seedance 2.5 in the image/video pickers, plus Kling 3.0 Pro, MiniMax H3 and Veo 3.1 as video-only
-additions with no fal equivalent shipped. `docs/provider-example-higgsfield.json` mirrors the
-original (image + video) definition; every field, including every new model's parameter names,
-option values and per-unit pricing, was verified live against Higgsfield's own `models_explore` and
-cost-preflight tools rather than guessed from documentation (see the file's own verification notes
-for what hasn't been exercised against the real API yet, like the character-reference path
-specifically). Artlist and Nim.video are meant to join the same way once their connection details
-are worked out; nothing about the engine favors Higgsfield specifically.
+Seedance 2.5 in the image/video pickers, plus Kling 3.0, MiniMax H3 and Veo 3.1 as video-only
+additions with no fal equivalent shipped (a further five video models were tried and removed again
+after proving intermittent on Higgsfield's own backend — see git history on this branch if
+revisiting). `docs/provider-example-higgsfield.json` mirrors the original (image + video)
+definition; every field, including every model's parameter names, option values and per-unit
+pricing, was verified live against Higgsfield's own `models_explore` and cost-preflight tools rather
+than guessed from documentation. Artlist and Nim.video are meant to join the same way once their
+connection details are worked out; nothing about the engine favors Higgsfield specifically.
+
+**Character reference at clip-generation level (Seedance 2.5 and MiniMax H3 via Higgsfield only):**
+when a clip is made from a picked version that was itself generated with the character checkbox on
+(`it["versions"][...]["character"]`), and the clip's video model is one of
+`CHAR_REFERENCE_VIDEO_MODELS` (`seedance-higgsfield`, `minimax-h3-higgsfield`), `_clip_job` attaches
+the character image as a second reference alongside the start frame — start frame first
+(`role: "start_image"`), character second (`role: "image_references"`), the input shape Filip
+verified working directly in Higgsfield's own web UI. Implemented the same way the image operation
+already handles an optional character reference: a second `media_import_url` step gated by
+`"when": "character_url"`, and a second `medias` entry gated by `"_when": "character_media_id"` —
+both silently no-op when no character is active, or for any other video model, since only
+`_clip_job` decides whether to pass `extra_urls` at all (the shared Higgsfield video template never
+branches on which model is selected). Take mode is unaffected — it already attaches the character
+image its own way, via `cfg["take_character"]`, appended directly into the source `image_urls` list
+rather than as a separate reference parameter.
 
 **GPT Image 2.5 via Higgsfield's Quality selector:** the UI's Quality/Output-size/Resolution
 controls used two CSS classes gating two mutually exclusive `"kind"` values (`gpt`: Quality + Output
