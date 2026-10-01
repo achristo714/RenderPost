@@ -22,6 +22,7 @@ import os
 import sys
 import json
 import math
+import re
 import time
 import uuid
 import asyncio
@@ -196,6 +197,7 @@ PROVIDERS = {"higgsfield": {
             {"tool": "generate_image_batch", "arguments": {"requests": [{"index": 0, "params": {
                 "model": "{higgsfield_model}", "variant": "{variant}", "quality": "{quality}",
                 "resolution": "{resolution}", "aspect_ratio": "{aspect_ratio}", "prompt": "{prompt}",
+                "declined_preset_id": "{declined_preset_id}",
                 "medias": [{"value": "{media_id}", "role": "image_references"},
                             {"value": "{character_media_id}", "role": "image_references", "_when": "character_media_id"}],
                 "use_unlim": False}}]},
@@ -211,6 +213,7 @@ PROVIDERS = {"higgsfield": {
                 "model": "{higgsfield_model}", "mode": "{mode}", "sound": "{sound}", "quality": "{quality}",
                 "duration": "{duration}", "resolution": "{resolution}", "aspect_ratio": "16:9",
                 "generate_audio": "{generate_audio}", "prompt": "{prompt}",
+                "declined_preset_id": "{declined_preset_id}",
                 "medias": [{"value": "{media_id}", "role": "start_image"}], "use_unlim": False}}]},
              "output_as": "job_id", "output_field": "jobs.0.job_id"},
             {"tool": "jobs_wait", "poll": True, "poll_done_field": "all_terminal",
@@ -931,6 +934,9 @@ def _model_extra_args(model_entry):
     return {k: v for k, v in (model_entry or {}).items() if k not in _MODEL_CATALOG_STRUCTURAL_KEYS}
 
 
+_PRESET_DECLINE_RE = re.compile(r"declined_preset_id=([0-9a-fA-F-]{36})")
+
+
 async def _mcp_call_once(session, step, args):
     tool_args = _fill_template(step.get("arguments", {}), args)
     result = await session.call_tool(step["tool"], tool_args)
@@ -989,7 +995,18 @@ async def _mcp_run_steps(url, headers, steps, args, cancelled):
             else:
                 if cancelled():
                     raise Cancelled()
-                data = await _mcp_call_once(session, step, args)
+                try:
+                    data = await _mcp_call_once(session, step, args)
+                except RuntimeError as e:
+                    # generate_image_batch/generate_video_batch can intercept a literal submission
+                    # with "a preset was recommended instead" and refuse to submit — this is Higgsfield
+                    # matching the prompt against its own preset library, not a real failure, and its
+                    # own error text names the exact retry: resubmit once with declined_preset_id set
+                    # to force the literal request through. Verified live (Kling 3.0 Pro, 2026-10-01).
+                    m = _PRESET_DECLINE_RE.search(str(e))
+                    if not m:
+                        raise
+                    data = await _mcp_call_once(session, step, {**args, "declined_preset_id": m.group(1)})
             field = step.get("output_field")
             out = _dig(data, field) if field else data
             if step.get("output_as"):
@@ -1072,10 +1089,18 @@ class AggregatorProvider:
         except Cancelled:
             raise
         except Exception as e:
-            msg = str(e)
+            # asyncio.TaskGroup (used internally by the mcp SDK's streamable_http_client) wraps the
+            # real failure in an opaque "unhandled errors in a TaskGroup (N sub-exception)" shell —
+            # str(e) on that tells the user nothing and defeats friendly()'s message matching (a 401
+            # or timeout buried inside stays invisible). Unwrap to the real leaf exception so both
+            # the 401-retry check below and the message that reaches the UI reflect the actual cause.
+            cause = e
+            while getattr(cause, "exceptions", None):
+                cause = cause.exceptions[0]
+            msg = str(cause)
             if ("401" in msg or "unauthorized" in msg.lower()) and not _retried and self._refresh_oauth():
                 return self._call_mcp(op_def, args, cancelled, _retried=True)
-            raise
+            raise RuntimeError(f"{self.label()}: {msg}") from e
         if not out:
             raise RuntimeError(f"{self.label()} finished but returned no result.")
         return out
