@@ -152,6 +152,11 @@ VIDEO_MODELS = {
                  "res": {"768": "768 · iterate here", "1080": "1080 · final"},
                  "durations": {"6": "6 s"}, "min_duration": 6,
                  "price": {"768": 0.033, "1080": 0.055}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
+    "flux3-video-higgsfield": {"label": "FLUX.3 Video · Black Forest Labs", "provider": "higgsfield", "recommended": True,
+                 "higgsfield_model": "flux_3_video",
+                 "hint": "multi-frame image-to-video with synchronized audio · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
+                 "res": {"720p": "720p · iterate here", "1080p": "1080p · final"}, "min_duration": 5,
+                 "price": {"720p": 0.1815, "1080p": 0.297}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
 }
 VIDEO_RES = {"480p": "480p · iterate here", "720p": "720p · final"}   # take mode (Seedance)
 # Optional: a JSON at this URL can add or update models without rebuilding the exe.
@@ -963,6 +968,7 @@ _PRESET_DECLINE_RE = re.compile(r"declined_preset_id=([0-9a-fA-F-]{36})")
 
 async def _mcp_call_once(session, step, args):
     tool_args = _fill_template(step.get("arguments", {}), args)
+    print(f"MCP call: {step['tool']} <- {json.dumps(tool_args, default=str)}", flush=True)
     result = await session.call_tool(step["tool"], tool_args)
     if getattr(result, "is_error", False):
         text = "".join(getattr(c, "text", "") for c in (result.content or []))
@@ -1002,7 +1008,9 @@ async def _mcp_run_steps(url, headers, steps, args, cancelled):
         streamable_http_client(url, http_client=http_client) as (read, write),
         mcp.ClientSession(read, write) as session,
     ):
+        print(f"MCP session opened, initializing... headers={list(headers.keys())}", flush=True)
         await session.initialize()
+        print("MCP initialize OK", flush=True)
         for step in steps:
             if step.get("when") and not args.get(step["when"]):
                 continue   # optional step (e.g. importing a character reference that wasn't provided) — skipped entirely
