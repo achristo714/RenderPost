@@ -113,21 +113,22 @@ VIDEO_MODELS = {
                  "hint": "same ByteDance model as the fal entry · runs on your Higgsfield subscription credits instead of a separate fal balance · adds 1080p · connect Higgsfield first",
                  "res": {"480p": "480p · iterate here", "720p": "720p", "1080p": "1080p · final"}, "min_duration": 4,
                  "price": {"480p": 0.10, "720p": 0.23, "1080p": 0.40}},   # per second, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
-    "kling3-higgsfield": {"label": "Kling 3.0 Pro · Kuaishou", "provider": "higgsfield", "recommended": True,
-                 "higgsfield_model": "kling3_0", "mode": "pro", "sound": "off", "resolution": None,
-                 "hint": "same Kling 3.0 Pro tier as the fal entry · native audio disabled for predictable pricing · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
-                 "res": None, "min_duration": 4,
-                 "price": {"flat": 0.0495}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
+    "kling3-higgsfield": {"label": "Kling 3.0 · Kuaishou", "provider": "higgsfield", "recommended": True,
+                 "higgsfield_model": "kling3_0", "sound": "off", "res_param": "mode",
+                 "hint": "native audio disabled for predictable pricing · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
+                 "res": {"std": "Standard · iterate here", "pro": "Pro · recommended", "4k": "4K · final"}, "min_duration": 4,
+                 "price": {"std": 0.04125, "pro": 0.0495, "4k": 0.198}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
     "minimax-h3-higgsfield": {"label": "MiniMax H3 · MiniMax", "provider": "higgsfield", "recommended": True,
                  "higgsfield_model": "minimax_h3", "resolution": "2K",
-                 "hint": "multimodal keyframe/reference video at a fixed 2K, the only resolution this model offers · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
+                 "hint": "multimodal keyframe/reference video at a fixed 2K, the only resolution this model offers — no selector shown because there's nothing to choose · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
                  "res": None, "min_duration": 4,
                  "price": {"flat": 0.066}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
     "veo3-1-higgsfield": {"label": "Veo 3.1 · Google", "provider": "higgsfield", "recommended": True,
-                 "higgsfield_model": "veo3_1", "quality": "basic", "resolution": None,
-                 "hint": "ultra-realistic cinematic quality, fixed to Higgsfield's basic tier for predictable pricing · only 4s, 6s or 8s clips · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
-                 "res": None, "durations": {"4": "4 s", "6": "6 s", "8": "8 s"}, "min_duration": 4,
-                 "price": {"flat": 0.132}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
+                 "higgsfield_model": "veo3_1", "res_param": "quality",
+                 "hint": "ultra-realistic cinematic quality · only 4s, 6s or 8s clips · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
+                 "res": {"basic": "Basic · iterate here", "high": "High", "ultra": "Ultra · final"},
+                 "durations": {"4": "4 s", "6": "6 s", "8": "8 s"}, "min_duration": 4,
+                 "price": {"basic": 0.132, "high": 0.132, "ultra": 0.297}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
 }
 VIDEO_RES = {"480p": "480p · iterate here", "720p": "720p · final"}   # take mode (Seedance)
 # Optional: a JSON at this URL can add or update models without rebuilding the exe.
@@ -1152,10 +1153,15 @@ class AggregatorProvider:
     def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False):
         # See edit()'s comment: _model_extra spread last lets a catalog entry fix or suppress a
         # parameter (e.g. a model with no resolution control) regardless of the live cfg default.
+        # A model whose resolution-equivalent tier isn't literally called "resolution" at the API
+        # level (e.g. Kling's "mode": std/pro/4k, Veo's "quality": basic/high/ultra) declares
+        # "res_param" to redirect the UI's Resolution control into that field instead.
+        extra = cfg.get("_model_extra", {})
+        res_key = extra.get("res_param") or "resolution"
         args = {"prompt": prompt, "image_url": image_urls[0], "image_urls": list(image_urls),
                 "duration": int(cfg.get("take_duration") if take else cfg.get("video_duration") or 0),
-                "resolution": cfg.get("video_res", ""),
-                **cfg.get("_model_extra", {})}
+                res_key: cfg.get("video_res", ""),
+                **extra}
         return self._call("video", args, cancelled)
 
     def download(self, url, out_path):
