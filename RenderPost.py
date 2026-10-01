@@ -32,6 +32,7 @@ import secrets
 import shutil
 import socket
 import threading
+import traceback
 import webbrowser
 import urllib.parse
 import urllib.error
@@ -129,6 +130,28 @@ VIDEO_MODELS = {
                  "res": {"basic": "Basic · iterate here", "high": "High", "ultra": "Ultra · final"},
                  "durations": {"4": "4 s", "6": "6 s", "8": "8 s"}, "min_duration": 4,
                  "price": {"basic": 0.132, "high": 0.132, "ultra": 0.297}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
+    "gemini-omni-flash-higgsfield": {"label": "Gemini Omni Flash 1.1 · Google", "provider": "higgsfield", "recommended": True,
+                 "higgsfield_model": "gemini_omni_flash_1_1", "mode": "image-to-video",
+                 "hint": "native audio, up to 4K, keyframe-aware · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
+                 "res": {"360p": "360p · iterate here", "720p": "720p", "1080p": "1080p", "4k": "4K · final"},
+                 "durations": {"4": "4 s", "5": "5 s", "6": "6 s", "8": "8 s", "10": "10 s"}, "min_duration": 4,
+                 "price": {"360p": 0.033, "720p": 0.099, "1080p": 0.1485, "4k": 0.297}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
+    "grok-video-15-higgsfield": {"label": "Grok Imagine 1.5 · xAI", "provider": "higgsfield", "recommended": True,
+                 "higgsfield_model": "grok_video_v15",
+                 "hint": "multimodal, start image plus audio references · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
+                 "res": {"480p": "480p · iterate here", "720p": "720p", "1080p": "1080p · final"}, "min_duration": 4,
+                 "price": {"480p": 0.0825, "720p": 0.1485, "1080p": 0.264}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
+    "happyhorse-higgsfield": {"label": "Happy Horse Video · Happy Horse", "provider": "higgsfield", "recommended": True,
+                 "higgsfield_model": "happy_horse_video",
+                 "hint": "text/image-to-video, single start frame · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
+                 "res": {"720p": "720p · iterate here", "1080p": "1080p · final"}, "min_duration": 4,
+                 "price": {"720p": 0.0825, "1080p": 0.1485}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
+    "minimax-hailuo-23-higgsfield": {"label": "MiniMax Hailuo 2.3 · MiniMax", "provider": "higgsfield", "recommended": True,
+                 "higgsfield_model": "minimax_hailuo", "variant": "minimax-2.3",
+                 "hint": "natural physics and facial emotion · only 6s clips — Higgsfield's own API rejects 1080p at 10s for this variant, so only the duration verified to work at every resolution is offered · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
+                 "res": {"768": "768 · iterate here", "1080": "1080 · final"},
+                 "durations": {"6": "6 s"}, "min_duration": 6,
+                 "price": {"768": 0.033, "1080": 0.055}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
 }
 VIDEO_RES = {"480p": "480p · iterate here", "720p": "720p · final"}   # take mode (Seedance)
 # Optional: a JSON at this URL can add or update models without rebuilding the exe.
@@ -943,7 +966,9 @@ async def _mcp_call_once(session, step, args):
     result = await session.call_tool(step["tool"], tool_args)
     if getattr(result, "is_error", False):
         text = "".join(getattr(c, "text", "") for c in (result.content or []))
-        raise RuntimeError(f"MCP tool \"{step['tool']}\" failed: {text[:300] or 'no details'}")
+        # Not truncated here — _mcp_run_steps searches this text for a declined_preset_id to retry
+        # with, which a fixed-length cut could land past; friendly() truncates for display downstream.
+        raise RuntimeError(f"MCP tool \"{step['tool']}\" failed: {text or 'no details'}")
     data = result.structured_content
     if data is None:
         text = next((c.text for c in (result.content or []) if getattr(c, "text", None)), None)
@@ -1085,23 +1110,41 @@ class AggregatorProvider:
         steps = op_def.get("steps")
         if not steps:
             raise RuntimeError(f"{self.label()} has no steps configured for this operation.")
-        try:
-            out = asyncio.run(_mcp_run_steps(self.defn["mcp_url"], self._headers(), steps, dict(args), cancelled))
-        except Cancelled:
-            raise
-        except Exception as e:
-            # asyncio.TaskGroup (used internally by the mcp SDK's streamable_http_client) wraps the
-            # real failure in an opaque "unhandled errors in a TaskGroup (N sub-exception)" shell —
-            # str(e) on that tells the user nothing and defeats friendly()'s message matching (a 401
-            # or timeout buried inside stays invisible). Unwrap to the real leaf exception so both
-            # the 401-retry check below and the message that reaches the UI reflect the actual cause.
-            cause = e
-            while getattr(cause, "exceptions", None):
-                cause = cause.exceptions[0]
-            msg = str(cause)
-            if ("401" in msg or "unauthorized" in msg.lower()) and not _retried and self._refresh_oauth():
-                return self._call_mcp(op_def, args, cancelled, _retried=True)
-            raise RuntimeError(f"{self.label()}: {msg}") from e
+        # Every call opens a brand-new session (streamable_http_client + ClientSession) from scratch —
+        # confirmed live that session.initialize() itself can fail transiently on an otherwise-healthy
+        # connection/model/account (reproduced and ruled out independently; a retry with a fresh
+        # session succeeds). Same attempts/backoff as with_retry() elsewhere, not that helper itself,
+        # because the 401 check needs the unwrapped leaf exception (see below), not str(e) on the
+        # TaskGroup wrapper with_retry would see.
+        attempts, delay = 3, 4
+        out = None
+        for i in range(attempts):
+            try:
+                out = asyncio.run(_mcp_run_steps(self.defn["mcp_url"], self._headers(), steps, dict(args), cancelled))
+                break
+            except Cancelled:
+                raise
+            except Exception as e:
+                # asyncio.TaskGroup (used internally by the mcp SDK's streamable_http_client) wraps the
+                # real failure in an opaque "unhandled errors in a TaskGroup (N sub-exception)" shell —
+                # str(e) on that tells the user nothing and defeats friendly()'s message matching (a 401
+                # or timeout buried inside stays invisible). Unwrap to the real leaf exception so both
+                # the 401-retry check below and the message that reaches the UI reflect the actual cause.
+                cause = e
+                while getattr(cause, "exceptions", None):
+                    cause = cause.exceptions[0]
+                msg = str(cause)
+                # Full detail to stdout (log.txt in the exe) — the message that reaches the UI is kept
+                # short by design, but this class of error (a real API's exact failure reason, buried
+                # under an MCP/asyncio transport wrapper) has needed the full traceback to diagnose.
+                code, data = getattr(cause, "code", None), getattr(cause, "data", None)
+                print(f"{self.label()} MCP call failed ({type(cause).__name__}): {msg} | code={code!r} data={data!r}", flush=True)
+                traceback.print_exc()
+                if ("401" in msg or "unauthorized" in msg.lower()) and not _retried and self._refresh_oauth():
+                    return self._call_mcp(op_def, args, cancelled, _retried=True)
+                if i == attempts - 1:
+                    raise RuntimeError(f"{self.label()}: {msg}") from e
+                time.sleep(delay); delay *= 2
         if not out:
             raise RuntimeError(f"{self.label()} finished but returned no result.")
         return out
