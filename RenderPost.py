@@ -1006,7 +1006,7 @@ async def _mcp_run_steps(url, headers, steps, args, cancelled):
     async with (
         httpx2.AsyncClient(headers=headers, timeout=60) as http_client,
         streamable_http_client(url, http_client=http_client) as (read, write),
-        mcp.ClientSession(read, write) as session,
+        mcp.ClientSession(read, write, client_info=mcp.types.Implementation(name=APP_NAME, version=APP_VERSION)) as session,
     ):
         print(f"MCP session opened, initializing... headers={list(headers.keys())}", flush=True)
         await session.initialize()
