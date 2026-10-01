@@ -312,9 +312,33 @@ def load_config():
     return cfg
 
 
+def _atomic_write_json(path, data):
+    """Write JSON without ever leaving `path` as a half-written file for a concurrent reader to
+    catch mid-write. Confirmed root cause of config.json's fal_key silently going blank (twice):
+    plain write_text() isn't atomic, a concurrent load_config() could read a truncated file while a
+    write was in progress, json.loads() raised, load_config()'s broad except fell back to
+    DEFAULT_CONFIG's blank fal_key, and whichever save_config() call used that snapshot wrote the
+    blank key straight back to disk. os.replace() is atomic on both Windows and POSIX — a reader of
+    `path` always sees either the complete old file or the complete new one, never a partial one."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    # os.replace() can transiently fail on Windows ("Access is denied") if something else briefly
+    # has the destination handle open (observed under heavy concurrent writes in testing) — retry
+    # rather than let one save silently fail.
+    for attempt in range(5):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.05)
+
+
 def save_config(cfg):
     user = {k: v for k, v in cfg.items() if k not in FOLDER_KEYS}
-    (config_dir() / "config.json").write_text(json.dumps(user, indent=2), encoding="utf-8")
+    with CONFIG_FILE_LOCK:
+        _atomic_write_json(config_dir() / "config.json", user)
     fp = folder_settings_path()
     if fp:
         with FOLDER_FILE_LOCK:
@@ -325,17 +349,17 @@ def save_config(cfg):
                 except Exception:
                     pass
             keep.update({k: cfg.get(k, "") for k in FOLDER_KEYS if k != "spend"})
-            fp.write_text(json.dumps(keep, indent=2), encoding="utf-8")
+            _atomic_write_json(fp, keep)
 
 
 def update_providers_config(mutate):
     """Change "providers" or "custom_providers" in config.json without racing save_config()'s own
-    unlocked, blind-overwrite write (every save_config() caller round-trips a full cfg snapshot
-    that can be stale by the time it writes, and two concurrent callers — e.g. this route and the
-    page's own frequent /api/config autosave — can clobber each other's change; confirmed live
-    while testing Connect/Disconnect). Locks, re-reads config.json fresh from disk, lets `mutate`
-    change just the dict it's handed, writes that back — so only these two keys are protected here,
-    not the wider pre-existing save_config() pattern this doesn't touch."""
+    write (both now share CONFIG_FILE_LOCK and both write atomically — see _atomic_write_json).
+    Locks, re-reads config.json fresh from disk, lets `mutate` change just the dict it's handed,
+    writes that back. save_config() still round-trips a full cfg snapshot that can be stale by the
+    time it writes (if another request changed config.json in between) — the lock and atomic write
+    only rule out a torn/corrupted read, not that narrower staleness window; this function sidesteps
+    it entirely for providers/custom_providers by always mutating a freshly re-read dict instead."""
     with CONFIG_FILE_LOCK:
         p = config_dir() / "config.json"
         cfg = {}
@@ -345,7 +369,7 @@ def update_providers_config(mutate):
             except Exception:
                 pass
         mutate(cfg)
-        p.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        _atomic_write_json(p, cfg)
     return cfg
 
 
