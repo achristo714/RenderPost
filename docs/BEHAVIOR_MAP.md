@@ -444,14 +444,29 @@ defaults `False`), toggled via `POST /api/video/char_ref` (`id`, `on`), independ
 prompt/status so toggling it doesn't require rewriting the motion prompt. When on, `_clip_job`
 attaches the character image as a second reference alongside the start frame — start frame first
 (`role: "start_image"`), character second (`role: "image_references"`), the input shape Filip
-verified working directly in Higgsfield's own web UI. Implemented the same way the image operation
-already handles an optional character reference: a second `media_import_url` step gated by
-`"when": "character_url"`, and a second `medias` entry gated by `"_when": "character_media_id"` —
-both silently no-op when the checkbox is off, or for any other video model, since only `_clip_job`
+verified working directly in Higgsfield's own web UI (and separately via a direct MCP test on
+Seedance 2.5, which allows this combination). Implemented the same way the image operation already
+handles an optional character reference: a second `media_import_url` step gated by `"when":
+"character_url"`, and a second `medias` entry gated by `"_when": "character_media_id"` — both
+silently no-op when the checkbox is off, or for any other video model, since only `_clip_job`
 decides whether to pass `extra_urls` at all (the shared Higgsfield video template never branches on
 which model is selected). Take mode is unaffected — it already attaches the character image its own
 way, via `cfg["take_character"]`, appended directly into the source `image_urls` list rather than as
 a separate reference parameter.
+
+**MiniMax H3 is the exception to "start frame first, character second"**: its real API rejects
+`start_image`/`end_image` combined with any reference media at all (`422`: "start_image/end_image
+cannot be mixed with reference media" — found live, not documented anywhere, fixed same day).
+Confirmed via direct MCP testing that the fix is to drop `start_image` entirely when a character
+reference is active and send *both* images as `image_references` instead (frame first, character
+second — order alone carries the "this one is the start frame" meaning for this model, there's no
+separate start_image role once reference mode is in play). This is model-specific, not a `_clip_job`
+decision: `AggregatorProvider.video()` computes the first media's role as `"{frame_role}"` — a new
+template placeholder, `"start_image"` by default, switched to `"image_references"` only when a
+character reference is active *and* the model's catalog entry declares `"char_ref_exclusive":
+True` (currently only `minimax-h3-higgsfield`). Seedance 2.5 keeps the default (`start_image` +
+`image_references` together) since its API accepts that combination — confirmed both in the
+original pig/fox MCP test and again while diagnosing this.
 
 **GPT Image 2.5 via Higgsfield's Quality selector:** the UI's Quality/Output-size/Resolution
 controls used two CSS classes gating two mutually exclusive `"kind"` values (`gpt`: Quality + Output

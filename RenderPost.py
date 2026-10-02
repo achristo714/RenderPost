@@ -120,7 +120,7 @@ VIDEO_MODELS = {
                  "res": {"std": "Standard · iterate here", "pro": "Pro · recommended", "4k": "4K · final"}, "min_duration": 4,
                  "price": {"std": 0.04125, "pro": 0.0495, "4k": 0.198}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
     "minimax-h3-higgsfield": {"label": "MiniMax H3 · MiniMax", "provider": "higgsfield", "recommended": True,
-                 "higgsfield_model": "minimax_h3", "resolution": "2K",
+                 "higgsfield_model": "minimax_h3", "resolution": "2K", "char_ref_exclusive": True,
                  "hint": "multimodal keyframe/reference video at a fixed 2K, the only resolution this model offers — no selector shown because there's nothing to choose · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
                  "res": None, "min_duration": 4,
                  "price": {"flat": 0.066}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
@@ -222,7 +222,7 @@ PROVIDERS = {"higgsfield": {
                 "duration": "{duration}", "resolution": "{resolution}", "aspect_ratio": "16:9",
                 "generate_audio": "{generate_audio}", "prompt": "{prompt}",
                 "declined_preset_id": "{declined_preset_id}",
-                "medias": [{"value": "{media_id}", "role": "start_image"},
+                "medias": [{"value": "{media_id}", "role": "{frame_role}"},
                             {"value": "{character_media_id}", "role": "image_references", "_when": "character_media_id"}],
                 "use_unlim": False}}]},
              "output_as": "job_id", "output_field": "jobs.0.job_id"},
@@ -1211,10 +1211,16 @@ class AggregatorProvider:
         # "res_param" to redirect the UI's Resolution control into that field instead.
         extra = cfg.get("_model_extra", {})
         res_key = extra.get("res_param") or "resolution"
+        # Some models (verified live: MiniMax H3) reject start_image/end_image combined with a
+        # reference image ("start_image/end_image cannot be mixed with reference media") — a
+        # character reference there has to replace start_image's role with image_references too,
+        # not add alongside it. "char_ref_exclusive" on the catalog entry opts a model into that.
+        frame_role = "image_references" if (extra_urls and extra.get("char_ref_exclusive")) else "start_image"
         args = {"prompt": prompt, "image_url": image_urls[0], "image_urls": list(image_urls),
                 "duration": int(cfg.get("take_duration") if take else cfg.get("video_duration") or 0),
                 res_key: cfg.get("video_res", ""),
                 "character_url": extra_urls[0] if extra_urls else "",
+                "frame_role": frame_role,
                 **extra}
         return self._call("video", args, cancelled)
 
