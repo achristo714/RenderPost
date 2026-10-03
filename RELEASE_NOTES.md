@@ -1,20 +1,19 @@
-## Render Post v1.11.0
+## Render Post v1.12.0
 
-Nim.video joins Higgsfield as a second built-in aggregator provider — same "pick it from the Model
-/ Video model dropdown" mechanism, no separate switch. Once connected (Connect providers →
-Nim.video, one-time browser sign-in), you get "Nano Banana Pro Edit" and "GPT Image 2.5 Flare" in
-the image picker and "Hailuo 2.3 Fast" and "Seedance 2.5" in the video picker, billed on your own
-Nim.video credits instead of a separate fal balance. Every parameter, price and upload mechanic
-was checked live against Nim's own tools rather than assumed from Higgsfield's shape — Nim turned
-out to need a genuinely different upload step (no import-by-URL; a short-lived upload slot plus a
-direct file POST) and a different reference-image shape (a flat list, not role-tagged), both now
-general engine features any future provider can also use. "Seedance 2.5 · Nim" ships with its
-resolution fixed to 720p for now (its pricing at other tiers isn't confirmed yet) and hasn't been
-run through an actual generation — try a short clip yourself before relying on it.
+Fixed a real bug in last release's Nim.video integration: enhancing through a Nim image model
+could report "fal refused this request (403)" even though the generation had actually succeeded
+(visible in Nim's own web UI) — the download step itself was failing, not the generation. Nim's
+CDN rejects a request with no browser-style User-Agent header; now fixed.
 
-Also in this release: the MiniMax H3 character-reference fix from 1.10.0 was re-confirmed working
-end-to-end this session (no code change needed).
+GPT Image 2.5 Flare and Sunburst via Nim.video get a real Quality selector (Low/Medium/High —
+previously fixed to Medium, since Nim bills each tier as its own underlying model rather than one
+adjustable parameter). Four more Nim-routed models join the lineup: Nano Banana 2, Kling 3.0,
+MiniMax H3 and Veo 3.1 — every parameter and price verified against Nim's own live model catalog.
+Seedance 2.5 · Nim also gains its full 480p/720p/1080p resolution range (was fixed to 720p only).
 
-Artlist is next, once its own connection details are worked out.
+A reminder from testing this release: a clip card stays locked to whichever video model it had
+when you last wrote its motion prompt — picking a different model in the dropdown doesn't change
+an existing card's model until you write its prompt again. This isn't new in this release, just
+easy to trip over.
 
-Nothing else changed since 1.10.0.
+Nothing else changed since 1.11.0.

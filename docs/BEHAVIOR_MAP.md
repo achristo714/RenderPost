@@ -1,6 +1,6 @@
 # Render Post — Behavior Map
 
-> Last verified against: v1.11.0
+> Last verified against: v1.12.0
 
 This is a map of how Render Post actually behaves: what happens when you click something, where
 that gets saved, and what logic decides the result. It is **not** a user guide (that's
@@ -530,24 +530,77 @@ Higgsfield's does (direct unauthenticated HTTP test against `/api/mcp/oauth/regi
 discovery metadata and DCR response both report `grant_types: ["authorization_code"]` only — no
 `refresh_token` grant, unlike Higgsfield — so its `PROVIDERS` entry declares `"fields":
 ["access_token"]` only; `_refresh_oauth()` already no-ops correctly for any provider with no stored
-`refresh_token`, so this needed no code change, just the right catalog data. Nim's own `GPT Image
-2.5 Flare/Sunburst` family splits quality tiers into separate `model_id`s rather than Higgsfield's
-single adjustable `quality` parameter — confirmed via its model catalog, not guessed — so the new
-`gpt-image-2.5-flare-nim` catalog entry is fixed to the Medium-quality `model_id` for now (no
-quality selector shown), deferring a future per-tier `model_id` switch to match the live-verified
-breadth Higgsfield's `gptres` kind already has. One Nim model family was found genuinely broken
-during this work (`gptConsistencyLow`/`High`, the plain, non-"runware"-prefixed GPT Image Editing
-models — failed with `generation_unavailable` even with a confirmed-good upload, while an
-`isChatRecommended` model with an identical request shape succeeded immediately right after) — not
-used in the catalog; the `runwareOpenaiGptImage25Flare/Sunburst...` family works and is what's
-shipped. Dollar price estimates for Nim models use $0.003125/credit (Nim's published Pro plan,
-$12.50/mo for 4000 credits — confirmed to match this account's own credit-balance cap, not a number
-Nim exposes directly through its MCP tools), the same "verify against your own plan tier" caveat
-Higgsfield's estimates already carry. `seedance-2-5-nim` was added from Nim's live model catalog
-(real `model_id`, parameters and the one 720p/5s price point Nim's tools exposed) but, unlike every
-other model this session added, was not run through an actual generation — its cost at the model's
-own minimum duration exceeded what remained of this session's spend authorization — so its
-resolution is fixed to the one verified-priced tier (720p) until someone runs it for real.
+`refresh_token`, so this needed no code change, just the right catalog data. One Nim model family
+was found genuinely broken during this work (`gptConsistencyLow`/`High`, the plain, non-"runware"-
+prefixed GPT Image Editing models — failed with `generation_unavailable` even with a confirmed-good
+upload, while an `isChatRecommended` model with an identical request shape succeeded immediately
+right after) — not used in the catalog; the `runwareOpenaiGptImage25Flare/Sunburst...` family works
+and is what's shipped. Dollar price estimates for Nim models use $0.003125/credit (Nim's published
+Pro plan, $12.50/mo for 4000 credits — confirmed to match this account's own credit-balance cap, not
+a number Nim exposes directly through its MCP tools), the same "verify against your own plan tier"
+caveat Higgsfield's estimates already carry.
+
+**Second pass, same branch, later: a real download bug, a real dispatch non-bug, and five more Nim
+models with two more new engine mechanisms — again each difference confirmed live.**
+
+**The real bug, found live running a non-demo instance against Filip's own Nim account**: enhancing
+through `gpt-image-2.5-flare-nim` reported "fal refused this request (403)" even though Nim's own
+web UI showed the generation had actually succeeded. The message is misleading twice over — it's
+not from fal, and it's not a 403 on the generation itself. `friendly()`'s `"403" in m` check is a
+plain substring match with no source check, and the real 403 was on the *download* step, from a
+plain `urllib.request.urlopen()` with no headers at all against Nim's static CDN — reproduced
+directly (`HTTPError 403`) and fixed by adding the same `User-Agent` header every other outbound
+call in `AggregatorProvider` already sends (`download()` was the one method that didn't). Higgsfield
+never hit this because whatever serves its own result URLs doesn't filter on User-Agent; Nim's does.
+Confirmed fixed with two real generations immediately after (`gpt-image-2.5-flare-nim` at Medium,
+then Low, to also prove the quality switch below is real and not silently landing on Medium every
+time — the Low run billed 5 credits vs Medium's 8, confirming it).
+
+**The reported non-bug**: a video generation selected as "Hailuo 2.3 Fast · Nim" instead ran as
+"MiniMax H3 · Higgsfield." Not a dispatch bug — the clip card being resubmitted was an old draft
+from earlier testing, still carrying `vmodel: "minimax-h3-higgsfield"` from when it was created;
+clip cards are deliberately sticky to whatever model they had when drafted (see the diagnosed, not
+a bug note above), and nothing re-reads the global model selector on a plain "Make clip" resubmit
+of an existing ready/failed draft. Confirmed by inspecting the folder's own `clips.json`: every
+existing draft had the stale Higgsfield `vmodel`. The fix, in this case, is to re-run "Write
+prompts" with the new model selected (which does refresh a reused draft's `vmodel`, see
+`_clip_cfg_fields()`) rather than clicking "Make clip" on an old card.
+
+**Two more engine mechanisms, both in `AggregatorProvider`, both generic (not Nim-specific) even
+though Nim is what needed them first:**
+
+- **`"quality_model_ids"` / `"quality_model_names"`** (`edit()`) and **`"res_model_ids"` /
+  `"res_model_names"`** (`video()`) — for a provider whose quality or resolution tiers are each a
+  *separate model id* rather than one adjustable request parameter. Verified live on three real
+  model families: Nim's GPT Image 2.5 Flare/Sunburst (Low/Medium/High are three distinct
+  `model_id`s — confirmed by the differing real credit charge above) and Kling 3.0 (Standard/Pro are
+  two distinct `model_id`s, confirmed via Kling 3's own `generationContract`, which forbids a
+  `resolution` argument outright on both — there's no runtime parameter to switch, only the model
+  itself). The catalog's own `"quality_opts"` dict (new, parallel to video's existing `"durations"`)
+  restricts the *Quality* dropdown itself to a model's real tiers, the same way `"res"` already
+  restricts the *Resolution* dropdown — needed because Nim's GPT family only has 3 tiers where fal's
+  own has 5 (no Extra high/Max), and showing all 5 with 2 silently collapsing onto "High" would be a
+  real, hard-to-notice correctness bug, not a convenience.
+- **`"res_case": "upper"`** (`video()`) — for a provider whose resolution string is the same value
+  as this UI's own lowercase dropdown, just differently cased. Verified live: Nim's MiniMax H3 Max
+  wants exact-case `"480P"`/`"768P"`; this UI's Resolution dropdown is `"480p"`/`"768p"` everywhere
+  else. A real 480p/5s generation through `minimax-h3-nim` billed exactly 50 credits (10 credits/sec
+  × 5s, the live-verified rate) — confirming both the transform and the price in one run.
+
+**Five more Nim models, all parameters verified live via Nim's own model catalog (never guessed),
+most via its free cost-preflight (`models_explore get` with an explicit `resolution`/`duration`
+argument returns a real adjusted price with no generation and no charge — used to verify per-tier
+pricing for Seedance 2.5, MiniMax H3 Max and Veo 3.1 without spending credits on every tier):**
+`nano-banana-2-nim` (run for real, 20 credits, matches its published rate exactly), `gpt-image-2.5-
+sunburst-nim` (same verified family as Flare, not separately re-run), `kling-3-0-nim` (Standard/Pro
+model-id switch verified via its own `generationContract`; not run for real — 45–60 credits/second
+made even a minimal clip the most expensive single verification this branch would have made, out of
+proportion to what a schema check already confirms), `minimax-h3-nim` (run for real, confirmed
+above), `veo-3-1-nim` (fixed to the Fast, no-generated-audio tier — Nim's Standard tier and both
+sound variants are real but notably pricier and not exposed yet; its flat per-resolution rate was
+confirmed via the free preflight, not run for real). `seedance-2-5-nim` also gained its full
+480p/720p/1080p resolution range this pass (previously fixed to 720p only, pending exactly this free
+per-tier price check) — still not run through an actual generation itself, same reason as Kling.
 
 ## 4. AI / prompt-brief reference
 

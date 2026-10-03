@@ -30,6 +30,12 @@ function modelOpts(table, all){
     .map(([k,v]) => [k, v.provider && v.provider !== "fal" ? `${v.label} · ${(S.providers[v.provider]||{}).label || v.provider}` : v.label]));
 }
 function syncModel(){ const m = S.models[$("#model").value]; if (!m) return; $("#setup").dataset.kind = m.kind;
+  // A model whose real quality tiers don't match the fal-wide default set (verified live: Nim's
+  // GPT Image 2.5 Flare/Sunburst only offer Low/Medium/High, each a separate provider-side model)
+  // declares its own "quality_opts" dict to restrict/relabel the selector, same way a video
+  // model's own "durations" already restricts the Duration selector below.
+  const qcur = $("#quality").value, qOpts = m.quality_opts || S.quality_options;
+  fill($("#quality"), qOpts, qOpts[qcur] ? qcur : Object.keys(qOpts)[0]);
   const rates = m.price ? (m.provider && m.provider !== "fal" ? ` · ${(S.providers[m.provider]||{}).label || m.provider} rates` : " · fal rates as of Aug 2026") : "";
   $("#modelhint").textContent = m.hint + rates; }
 function fillModels(){

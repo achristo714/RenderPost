@@ -48,7 +48,7 @@ from prompts import (
 )
 
 APP_NAME = "RenderPost"
-APP_VERSION = "1.11.0"
+APP_VERSION = "1.12.0"
 # Optional: where the exe checks for a newer release. Point this at your GitHub repo's
 # latest-release API and the header shows an "Update available" link when a newer tag exists.
 # e.g. "https://api.github.com/repos/YOURNAME/renderpost/releases/latest"   ("" = don't check)
@@ -63,6 +63,18 @@ GPT_IMAGE_HIGGSFIELD_EST = {
     "high":   {"1K": 0.0495, "2K": 0.0908, "4K": 0.1403},
     "xhigh":  {"1K": 0.0825, "2K": 0.1485, "4K": 0.2310},
     "max":    {"1K": 0.1650, "2K": 0.2970, "4K": 0.4950},
+}
+# GPT Image 2.5 via Nim.video: each quality tier is its own model id on Nim (unlike fal/Higgsfield's
+# single adjustable "quality" param) — only Low/Medium/High exist, verified via Nim's own model
+# catalog (runwareOpenaiGptImage25Flare/SunburstConsistency{Low,Medium,High}). Credits verified live
+# (Low 3cr, Medium 6-8cr — Nim adds ~2cr/megapixel of reference images on top of the base rate, High
+# 22cr) at $0.003125/credit (Nim's published Pro plan, $12.50/mo for 4000 credits — matches this
+# account's own balance cap). Same number across every resolution column: Nim's own model catalog
+# doesn't expose a per-resolution breakdown for this family the way it does for video models.
+GPT_IMAGE_NIM_EST = {
+    "low":    {"1K": 0.0094, "2K": 0.0094, "4K": 0.0094},
+    "medium": {"1K": 0.025,  "2K": 0.025,  "4K": 0.025},
+    "high":   {"1K": 0.0688, "2K": 0.0688, "4K": 0.0688},
 }
 
 MODELS = {
@@ -97,10 +109,31 @@ MODELS = {
                         "nim_model": "3c1b1c5b-c1d6-44a8-b986-3068820f4927", "nim_model_name": "Nano Banana Pro Edit",
                         "quality": None, "price": 0.078, "mult": {"1K": 1, "2K": 1, "4K": 1},
                         "hint": "same Google model Higgsfield also offers · best at preserving identity/character detail across edits · verified live, 25 credits at 2K (about $0.08 on a $12.50/mo Nim Pro plan) · connect Nim.video first"},
+    "nano-banana-2-nim": {"label": "Nano Banana 2 Edit · Google, fast", "kind": "nano", "provider": "nim", "recommended": True,
+                        "nim_model": "6a648ab7-a339-40f1-a8b3-586f15512968", "nim_model_name": "Nano Banana 2 Edit",
+                        "quality": None, "price": 0.0625, "mult": {"1K": 1, "2K": 1, "4K": 1},
+                        "hint": "same Google model Higgsfield also offers · faster, cheaper sibling of Nano Banana Pro Edit · verified live, 20 credits at 2K (about $0.06 on a $12.50/mo Nim Pro plan) · connect Nim.video first"},
+    # GPT Image 2.5 Flare/Sunburst · Nim: unlike fal/Higgsfield's single adjustable "quality" param,
+    # Nim bills each quality tier as its OWN model id (verified via Nim's own model catalog) — the
+    # Quality dropdown has to pick a different model, not just a different request field. That's
+    # what "quality_model_ids"/"quality_model_names" are for (consumed by AggregatorProvider.edit());
+    # "quality_opts" restricts the dropdown itself to exactly these three real tiers (Nim has no
+    # Extra-high/Max tier the way fal does). Low/Medium/High ids verified live via models_explore;
+    # Medium's edit() was also run through a real generation end to end.
     "gpt-image-2.5-flare-nim": {"label": "GPT Image 2.5 Flare · OpenAI", "kind": "nano", "provider": "nim", "recommended": True,
                         "nim_model": "01f73222-3ce4-4470-9352-afa375155d1a", "nim_model_name": "GPT Image 2.5 Flare",
-                        "quality": None, "price": 0.019, "mult": {"1K": 1, "2K": 1, "4K": 1},
-                        "hint": "same OpenAI model as the fal/Higgsfield Flare entries, fixed to Medium quality for now — Nim bills each GPT Image quality tier as a separate model id, unlike fal/Higgsfield's single adjustable parameter · verified live, 6-8 credits (about $0.02-0.03 on a $12.50/mo Nim Pro plan) · connect Nim.video first"},
+                        "quality": None, "quality_opts": {"low": "Low", "medium": "Medium", "high": "High"},
+                        "quality_model_ids": {"low": "ca70670d-8ee5-4e96-83c0-ee8546fc56ff", "medium": "01f73222-3ce4-4470-9352-afa375155d1a", "high": "ce71657f-3e7c-4243-879e-1c90eb4c6840"},
+                        "quality_model_names": {"low": "GPT Image 2.5 Flare", "medium": "GPT Image 2.5 Flare", "high": "GPT Image 2.5 Flare"},
+                        "price_table": GPT_IMAGE_NIM_EST, "mult": {"1K": 1, "2K": 1, "4K": 1},
+                        "hint": "same OpenAI model as the fal/Higgsfield Flare entries · Nim bills each quality tier as a separate model, so only Low/Medium/High exist here (no Extra high/Max) · verified live (Medium run through a real generation; Low/High ids confirmed via Nim's own catalog, not yet run) · Nim adds a small surcharge per megapixel of reference images on top of the base rate, so the real charge varies a little by image size · connect Nim.video first"},
+    "gpt-image-2.5-sunburst-nim": {"label": "GPT Image 2.5 Sunburst · OpenAI", "kind": "nano", "provider": "nim", "recommended": True,
+                        "nim_model": "1f71957b-194c-45ad-a575-82f46c12223c", "nim_model_name": "GPT Image 2.5 Sunburst",
+                        "quality": None, "quality_opts": {"low": "Low", "medium": "Medium", "high": "High"},
+                        "quality_model_ids": {"low": "2e448cf2-cbda-455e-8cae-36d0aa23ef36", "medium": "1f71957b-194c-45ad-a575-82f46c12223c", "high": "286c0a42-cd0d-4e5d-b2a8-e1f2b76a948c"},
+                        "quality_model_names": {"low": "GPT Image 2.5 Sunburst", "medium": "GPT Image 2.5 Sunburst", "high": "GPT Image 2.5 Sunburst"},
+                        "price_table": GPT_IMAGE_NIM_EST, "mult": {"1K": 1, "2K": 1, "4K": 1},
+                        "hint": "same OpenAI model as the fal/Higgsfield Sunburst entries · Nim bills each quality tier as a separate model, so only Low/Medium/High exist here (no Extra high/Max) · parameters and ids verified via Nim's own model catalog (same family as Flare, not individually re-run — see Flare's own note) · connect Nim.video first"},
 }
 RES_OPTIONS = {"1K": "1K (about 1024px)", "2K": "2K (about 2048px)", "4K": "4K (about 4096px)"}
 
@@ -154,10 +187,40 @@ VIDEO_MODELS = {
                  "price": {"flat": 0.094}},
     "seedance-2-5-nim": {"label": "Seedance 2.5 · ByteDance", "provider": "nim", "recommended": True,
                  "nim_model": "dc224f67-6752-4eaf-aa7d-10f20b810bb0", "nim_model_name": "Seedance 2.5",
-                 "resolution": "720p",   # fixed: Nim's per-resolution pricing for this model isn't confirmed beyond 720p, so no selector is shown yet
-                 "hint": "same ByteDance model Higgsfield also offers · fixed to 720p for now (other resolutions' Nim pricing not yet confirmed) · parameters verified against Nim's own live model catalog — not yet run through an actual generation (its cost at the minimum 4s was higher than this session's remaining verification budget allowed), so try one short clip yourself first · runs on your Nim.video credits, 50 credits/second at 720p (about $0.16/s on a $12.50/mo Nim Pro plan) · connect Nim.video first",
-                 "res": None, "min_duration": 4,
-                 "price": {"flat": 0.15625}},
+                 "hint": "same ByteDance model Higgsfield also offers · real per-resolution rates confirmed live via Nim's free cost-preflight (no generation needed to check a price) · parameters verified against Nim's own live model catalog — not yet run through an actual paid generation itself (its cost even at the minimum duration was higher than this session's remaining verification budget allowed), so try one short clip yourself first · connect Nim.video first",
+                 "res": {"480p": "480p · iterate here", "720p": "720p", "1080p": "1080p · final"}, "min_duration": 4,
+                 "price": {"480p": 0.071875, "720p": 0.15625, "1080p": 0.328125}},   # per second, verified live via models_explore's free cost preflight (resolution param), at $0.003125/credit
+    # Kling 3.0 · Nim: Standard and Pro are each their OWN model id on Nim (verified live: both
+    # forbid a runtime "resolution" parameter outright) — no 4K tier the way Higgsfield's Kling
+    # offers. "res_model_ids" switches the model id itself, keyed by the Resolution dropdown.
+    "kling-3-0-nim": {"label": "Kling 3.0 · Kuaishou", "provider": "nim", "recommended": True,
+                 "nim_model": "a278a676-48eb-4035-b9b0-2015d2fe66de", "nim_model_name": "Kling 3 Standard + Sound",
+                 "resolution": None,   # forbidden param at the API level for both tiers — verified live
+                 "res_model_ids": {"standard": "a278a676-48eb-4035-b9b0-2015d2fe66de", "pro": "92fe3361-dcfb-4116-ba55-ce7cdfe03f42"},
+                 "res_model_names": {"standard": "Kling 3 Standard + Sound", "pro": "Kling 3 Pro + Sound"},
+                 "hint": "native audio always on (Nim doesn't offer a silent Kling 3 variant) · no 4K tier the way Higgsfield's Kling 3.0 has · parameters and per-tier pricing verified via Nim's own model catalog, not yet run through an actual generation · connect Nim.video first",
+                 "res": {"standard": "Standard · iterate here", "pro": "Pro · final"}, "min_duration": 3,
+                 "price": {"standard": 0.140625, "pro": 0.1875}},   # per second, verified via Nim's own model catalog, at $0.003125/credit
+    # MiniMax H3 · Nim: unlike Higgsfield's version (fixed 2K, nothing to choose), Nim's MiniMax H3
+    # Max genuinely offers two resolutions. Its API wants exact-case "480P"/"768P" — "res_case":
+    # "upper" transforms this UI's lowercase dropdown value rather than needing separate option keys.
+    "minimax-h3-nim": {"label": "MiniMax H3 Max · MiniMax", "provider": "nim", "recommended": True,
+                 "nim_model": "383fc57a-c289-42ec-a8ca-dd4b5c348c72", "nim_model_name": "MiniMax H3 Max",
+                 "res_case": "upper",
+                 "hint": "real resolution choice, unlike Higgsfield's fixed-2K MiniMax H3 · up to 9 reference images at the API level (character-reference checkbox not wired to this model yet) · parameters and per-resolution pricing verified live via Nim's free cost preflight, not yet run through an actual generation · connect Nim.video first",
+                 "res": {"480p": "480p · iterate here", "768p": "768p · final"}, "min_duration": 5,
+                 "price": {"480p": 0.03125, "768p": 0.05}},   # per second, verified live via models_explore's free cost preflight, at $0.003125/credit
+    # Veo 3.1 · Nim: the "Fast, without audio" tier — Nim also offers a Standard tier and sound
+    # variants of both (confirmed via its own catalog), each priced noticeably higher; fixed to
+    # Fast/silent for now since there's no separate UI control here for that axis yet. Resolution
+    # IS a real runtime parameter on this one model (unlike Kling 3.0's model-per-tier split above),
+    # and its rate was confirmed flat across both tiers via Nim's free cost preflight.
+    "veo-3-1-nim": {"label": "Veo 3.1 · Google", "provider": "nim", "recommended": True,
+                 "nim_model": "d3c538f2-b174-4fb3-871c-893951117302", "nim_model_name": "Veo 3.1 Fast",
+                 "hint": "Fast tier, no generated audio — Nim also has a Standard tier and sound variants, both pricier; fixed to Fast/silent for now · only 8s clips at the API level · per-resolution rate confirmed flat live via Nim's free cost preflight, not yet run through an actual generation · connect Nim.video first",
+                 "res": {"720p": "720p · iterate here", "1080p": "1080p · final"},
+                 "durations": {"8": "8 s"}, "min_duration": 8,
+                 "price": {"720p": 0.046875, "1080p": 0.046875}},
 }
 # These two Higgsfield video models accept a character image as a second reference alongside the
 # start frame (verified working in Higgsfield's own web UI); others ignore it. Clip-generation only
@@ -1043,7 +1106,7 @@ def _dig(obj, path):
 
 
 _MODEL_CATALOG_STRUCTURAL_KEYS = {"label", "kind", "endpoint", "i2v", "provider", "price", "mult",
-                                    "hint", "recommended", "res", "min_duration", "price_table", "durations"}
+                                    "hint", "recommended", "res", "min_duration", "price_table", "durations", "quality_opts"}
 
 
 def _model_extra_args(model_entry):
@@ -1322,6 +1385,7 @@ class AggregatorProvider:
         # None, dropped by _fill_template) can override a live-cfg default below it — e.g. suppressing
         # "quality" for a model that has no such parameter, regardless of what the UI's quality
         # selector currently shows (it's hidden, but cfg still holds its last value).
+        extra = cfg.get("_model_extra", {})
         args = {"prompt": prompt, "image_url": image_url, "image_urls": [image_url] + list(extra_urls),
                 "character_url": extra_urls[0] if extra_urls else "",
                 "width": w, "height": h, "aspect_ratio": f"{int(w)//g}:{int(h)//g}",
@@ -1329,7 +1393,17 @@ class AggregatorProvider:
                 # Same value, original case ("1K"/"2K"/"4K") — Higgsfield's API wants it lowercased
                 # (above), but Nim.video's allowedValues are exact-case "1K"/"2K"/"4K"; verified live.
                 "resolution_upper": cfg.get("resolution", ""), "quality": cfg.get("quality", ""),
-                **cfg.get("_model_extra", {})}
+                **extra}
+        # A model whose quality tiers are each a separate provider-side model id rather than fal/
+        # Higgsfield's single adjustable "quality" parameter (verified live: Nim's GPT Image 2.5
+        # Flare/Sunburst) declares "quality_model_ids"/"quality_model_names" ({quality: id/name})
+        # to switch which underlying model this call actually hits, keyed by the UI's live Quality
+        # selection — the catalog's own "quality" dict (consumed by the frontend) restricts that
+        # selector to exactly the tiers this map covers.
+        qmap = extra.get("quality_model_ids")
+        if qmap and cfg.get("quality") in qmap:
+            args["nim_model"] = qmap[cfg["quality"]]
+            args["nim_model_name"] = (extra.get("quality_model_names") or {}).get(cfg["quality"], args.get("nim_model_name"))
         return [self._call("image", args, cancelled)]
 
     def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False, extra_urls=()):
@@ -1340,6 +1414,13 @@ class AggregatorProvider:
         # "res_param" to redirect the UI's Resolution control into that field instead.
         extra = cfg.get("_model_extra", {})
         res_key = extra.get("res_param") or "resolution"
+        res_val = cfg.get("video_res", "")
+        # Some providers' real API resolution strings don't match this UI's own lowercase dropdown
+        # values (verified live: Nim's MiniMax H3 Max wants exact-case "480P"/"768P") — "res_case":
+        # "upper" transforms the live selection's case without needing separate dropdown option
+        # strings just to satisfy one provider's casing.
+        if extra.get("res_case") == "upper":
+            res_val = str(res_val).upper()
         # Some models (verified live: MiniMax H3) reject start_image/end_image combined with a
         # reference image ("start_image/end_image cannot be mixed with reference media") — a
         # character reference there has to replace start_image's role with image_references too,
@@ -1348,14 +1429,27 @@ class AggregatorProvider:
         duration = int(cfg.get("take_duration") if take else cfg.get("video_duration") or 0)
         args = {"prompt": prompt, "image_url": image_urls[0], "image_urls": list(image_urls),
                 "duration": duration, "duration_ms": duration * 1000,   # Nim.video's "mediaLength" is milliseconds, not seconds
-                res_key: cfg.get("video_res", ""),
+                res_key: res_val,
                 "character_url": extra_urls[0] if extra_urls else "",
                 "frame_role": frame_role,
                 **extra}
+        # Same idea as edit()'s "quality_model_ids", but keyed by the Resolution dropdown's value —
+        # for a model whose "resolution" tier is really a separate provider-side model id with no
+        # runtime resolution parameter at all (verified live: Nim's Kling 3.0 Standard/Pro both
+        # forbid a "resolution" argument outright; Standard vs Pro IS the model choice).
+        rmap = extra.get("res_model_ids")
+        if rmap and cfg.get("video_res") in rmap:
+            args["nim_model"] = rmap[cfg["video_res"]]
+            args["nim_model_name"] = (extra.get("res_model_names") or {}).get(cfg["video_res"], args.get("nim_model_name"))
         return self._call("video", args, cancelled)
 
     def download(self, url, out_path):
-        with urllib.request.urlopen(url, timeout=300) as resp:
+        # A bare urllib request (no User-Agent at all) gets a flat 403 from Nim.video's CDN —
+        # confirmed live: the exact same URL succeeds with curl (which sends its own UA) and fails
+        # with plain urlopen(). Every other outbound request in this class already sends one
+        # (_request(), _mcp_upload_step()); this was the one spot that didn't.
+        req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+        with urllib.request.urlopen(req, timeout=300) as resp:
             out_path.write_bytes(resp.read())
 
 
@@ -1908,7 +2002,7 @@ class Handler(BaseHTTPRequestHandler):
                 "version": APP_VERSION, "latest": LATEST, "catalog": {**CATALOG_STATUS, "url": cfg.get("catalog_url", "") or MODEL_CATALOG_URL},
                 "config": {k: v for k, v in cfg.items() if k not in ("fal_key", "providers", "custom_providers")},
                 "size_options": SIZE_OPTIONS, "quality_options": QUALITY_OPTIONS,
-                "models": {k: {"label": v["label"], "kind": v["kind"], "hint": v["hint"], "price": v.get("price"), "mult": v.get("mult"), "price_table": v.get("price_table"), "recommended": v.get("recommended", False), "provider": v.get("provider", "fal")} for k, v in MODELS.items()},
+                "models": {k: {"label": v["label"], "kind": v["kind"], "hint": v["hint"], "price": v.get("price"), "mult": v.get("mult"), "price_table": v.get("price_table"), "quality_opts": v.get("quality_opts"), "recommended": v.get("recommended", False), "provider": v.get("provider", "fal")} for k, v in MODELS.items()},
                 "res_options": RES_OPTIONS, "variation_options": VARIATION_OPTIONS, "angle_options": ANGLE_OPTIONS,
                 "picks": sum(1 for it in STATE.snapshot() for v in it["versions"] if v.get("pick")),
                 "spend": float(cfg.get("spend") or 0), "spend_alert": float(cfg.get("spend_alert") or 10),
