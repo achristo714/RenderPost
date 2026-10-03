@@ -48,7 +48,7 @@ from prompts import (
 )
 
 APP_NAME = "RenderPost"
-APP_VERSION = "1.12.0"
+APP_VERSION = "1.12.1"
 # Optional: where the exe checks for a newer release. Point this at your GitHub repo's
 # latest-release API and the header shows an "Update available" link when a newer tag exists.
 # e.g. "https://api.github.com/repos/YOURNAME/renderpost/releases/latest"   ("" = don't check)
@@ -105,14 +105,17 @@ MODELS = {
     # used is $12.50/month for 4000 credits (Nim's own published Pro plan, confirmed live to match
     # this account's own subscriptionCredits.max of 4000) = $0.003125/credit — verify against your
     # own plan tier before trusting the dollar figure; the credit count itself is exact.
+    # "nim_aspect_ratios": "auto" — verified live that both Nano Banana Edit models accept this and
+    # preserve the source image's own aspect ratio directly; omitting the field entirely (as every
+    # Nim image model did before this fix) makes Nim default to a flat 16:9 regardless of input.
     "nano-banana-pro-edit-nim": {"label": "Nano Banana Pro Edit · Google", "kind": "nano", "provider": "nim", "recommended": True,
                         "nim_model": "3c1b1c5b-c1d6-44a8-b986-3068820f4927", "nim_model_name": "Nano Banana Pro Edit",
-                        "quality": None, "price": 0.078, "mult": {"1K": 1, "2K": 1, "4K": 1},
-                        "hint": "same Google model Higgsfield also offers · best at preserving identity/character detail across edits · verified live, 25 credits at 2K (about $0.08 on a $12.50/mo Nim Pro plan) · connect Nim.video first"},
+                        "quality": None, "nim_aspect_ratios": "auto", "price": 0.078, "mult": {"1K": 1, "2K": 1, "4K": 1},
+                        "hint": "same Google model Higgsfield also offers · best at preserving identity/character detail across edits · output aspect ratio matches the input automatically · verified live, 25 credits at 2K (about $0.08 on a $12.50/mo Nim Pro plan) · connect Nim.video first"},
     "nano-banana-2-nim": {"label": "Nano Banana 2 Edit · Google, fast", "kind": "nano", "provider": "nim", "recommended": True,
                         "nim_model": "6a648ab7-a339-40f1-a8b3-586f15512968", "nim_model_name": "Nano Banana 2 Edit",
-                        "quality": None, "price": 0.0625, "mult": {"1K": 1, "2K": 1, "4K": 1},
-                        "hint": "same Google model Higgsfield also offers · faster, cheaper sibling of Nano Banana Pro Edit · verified live, 20 credits at 2K (about $0.06 on a $12.50/mo Nim Pro plan) · connect Nim.video first"},
+                        "quality": None, "nim_aspect_ratios": "auto", "price": 0.0625, "mult": {"1K": 1, "2K": 1, "4K": 1},
+                        "hint": "same Google model Higgsfield also offers · faster, cheaper sibling of Nano Banana Pro Edit · output aspect ratio matches the input automatically · verified live, 20 credits at 2K (about $0.06 on a $12.50/mo Nim Pro plan) · connect Nim.video first"},
     # GPT Image 2.5 Flare/Sunburst · Nim: unlike fal/Higgsfield's single adjustable "quality" param,
     # Nim bills each quality tier as its OWN model id (verified via Nim's own model catalog) — the
     # Quality dropdown has to pick a different model, not just a different request field. That's
@@ -120,20 +123,25 @@ MODELS = {
     # "quality_opts" restricts the dropdown itself to exactly these three real tiers (Nim has no
     # Extra-high/Max tier the way fal does). Low/Medium/High ids verified live via models_explore;
     # Medium's edit() was also run through a real generation end to end.
+    # "nim_aspect_ratios": a real list, not "auto" — verified live that GPT Image 2.5 Flare/Sunburst
+    # have no "auto" option and default to a flat 16:9 when requestedAspectRatio is omitted; the
+    # exact computed aspect ratio is used when it's one of these, else the nearest (_nearest_ratio).
     "gpt-image-2.5-flare-nim": {"label": "GPT Image 2.5 Flare · OpenAI", "kind": "nano", "provider": "nim", "recommended": True,
                         "nim_model": "01f73222-3ce4-4470-9352-afa375155d1a", "nim_model_name": "GPT Image 2.5 Flare",
                         "quality": None, "quality_opts": {"low": "Low", "medium": "Medium", "high": "High"},
                         "quality_model_ids": {"low": "ca70670d-8ee5-4e96-83c0-ee8546fc56ff", "medium": "01f73222-3ce4-4470-9352-afa375155d1a", "high": "ce71657f-3e7c-4243-879e-1c90eb4c6840"},
                         "quality_model_names": {"low": "GPT Image 2.5 Flare", "medium": "GPT Image 2.5 Flare", "high": "GPT Image 2.5 Flare"},
+                        "nim_aspect_ratios": ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "5:4", "4:5", "2:3"],
                         "price_table": GPT_IMAGE_NIM_EST, "mult": {"1K": 1, "2K": 1, "4K": 1},
-                        "hint": "same OpenAI model as the fal/Higgsfield Flare entries · Nim bills each quality tier as a separate model, so only Low/Medium/High exist here (no Extra high/Max) · verified live (Medium run through a real generation; Low/High ids confirmed via Nim's own catalog, not yet run) · Nim adds a small surcharge per megapixel of reference images on top of the base rate, so the real charge varies a little by image size · connect Nim.video first"},
+                        "hint": "same OpenAI model as the fal/Higgsfield Flare entries · Nim bills each quality tier as a separate model, so only Low/Medium/High exist here (no Extra high/Max) · output aspect ratio matches the input when it's one of Nim's nine supported ratios, else the closest one · verified live (Medium and Low both run through real generations; the High id is confirmed via Nim's own catalog, not yet run) · Nim adds a small surcharge per megapixel of reference images on top of the base rate, so the real charge varies a little by image size · connect Nim.video first"},
     "gpt-image-2.5-sunburst-nim": {"label": "GPT Image 2.5 Sunburst · OpenAI", "kind": "nano", "provider": "nim", "recommended": True,
                         "nim_model": "1f71957b-194c-45ad-a575-82f46c12223c", "nim_model_name": "GPT Image 2.5 Sunburst",
                         "quality": None, "quality_opts": {"low": "Low", "medium": "Medium", "high": "High"},
                         "quality_model_ids": {"low": "2e448cf2-cbda-455e-8cae-36d0aa23ef36", "medium": "1f71957b-194c-45ad-a575-82f46c12223c", "high": "286c0a42-cd0d-4e5d-b2a8-e1f2b76a948c"},
                         "quality_model_names": {"low": "GPT Image 2.5 Sunburst", "medium": "GPT Image 2.5 Sunburst", "high": "GPT Image 2.5 Sunburst"},
+                        "nim_aspect_ratios": ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "5:4", "4:5", "2:3"],
                         "price_table": GPT_IMAGE_NIM_EST, "mult": {"1K": 1, "2K": 1, "4K": 1},
-                        "hint": "same OpenAI model as the fal/Higgsfield Sunburst entries · Nim bills each quality tier as a separate model, so only Low/Medium/High exist here (no Extra high/Max) · parameters and ids verified via Nim's own model catalog (same family as Flare, not individually re-run — see Flare's own note) · connect Nim.video first"},
+                        "hint": "same OpenAI model as the fal/Higgsfield Sunburst entries · Nim bills each quality tier as a separate model, so only Low/Medium/High exist here (no Extra high/Max) · output aspect ratio matches the input when it's one of Nim's nine supported ratios, else the closest one · parameters and ids verified via Nim's own model catalog (same family as Flare, not individually re-run — see Flare's own note) · connect Nim.video first"},
 }
 RES_OPTIONS = {"1K": "1K (about 1024px)", "2K": "2K (about 2048px)", "4K": "4K (about 4096px)"}
 
@@ -345,7 +353,7 @@ PROVIDERS = {"higgsfield": {
              "output_as": "character_media_url", "output_field": "file_url"},
             {"tool": "generate_image", "arguments": {
                 "model_id": "{nim_model}", "model_name": "{nim_model_name}", "prompt": "{prompt}",
-                "resolution": "{resolution_upper}",
+                "resolution": "{resolution_upper}", "requestedAspectRatio": "{aspect_ratio_nim}",
                 # Nim's own "fileInputs" is a flat array of plain URL strings, not Higgsfield's
                 # role-tagged {value, role} objects — "_scalar" fills each item as a bare string
                 # instead of a dict (see _fill_template's docstring).
@@ -1105,6 +1113,20 @@ def _dig(obj, path):
     return cur
 
 
+def _nearest_ratio(w, h, allowed):
+    """Pick the string in `allowed` (each a plain "W:H" aspect ratio) numerically closest to the
+    real w/h — used when a provider's aspect ratio is a closed enum rather than accepting the exact
+    computed fraction the way Higgsfield's API does (verified live: Nim's GPT Image 2.5 Flare/
+    Sunburst default to a flat 16:9 when the field is simply omitted, regardless of the source
+    image's own aspect — passing the nearest real enum value instead is what makes the output
+    actually match, or come close to, what was fed in)."""
+    target = w / h
+    def val(r):
+        a, b = r.split(":")
+        return float(a) / float(b)
+    return min(allowed, key=lambda r: abs(val(r) - target))
+
+
 _MODEL_CATALOG_STRUCTURAL_KEYS = {"label", "kind", "endpoint", "i2v", "provider", "price", "mult",
                                     "hint", "recommended", "res", "min_duration", "price_table", "durations", "quality_opts"}
 
@@ -1404,6 +1426,18 @@ class AggregatorProvider:
         if qmap and cfg.get("quality") in qmap:
             args["nim_model"] = qmap[cfg["quality"]]
             args["nim_model_name"] = (extra.get("quality_model_names") or {}).get(cfg["quality"], args.get("nim_model_name"))
+        # Nim's own aspect ratio is a closed enum per model, not an arbitrary fraction the way
+        # Higgsfield's API accepts — verified live: GPT Image 2.5 Flare/Sunburst default to a flat
+        # 16:9 whenever this field is simply omitted, regardless of the source image's own aspect.
+        # "nim_aspect_ratios" is either the literal string "auto" (some Consistency/Edit models —
+        # verified live for Nano Banana Pro Edit/2 — accept this and preserve the input's own aspect
+        # directly, no computation needed) or that model's allowed list, in which case the exact
+        # computed "aspect_ratio" is used when it's already one of them, else the nearest one.
+        ratios = extra.get("nim_aspect_ratios")
+        if ratios == "auto":
+            args["aspect_ratio_nim"] = "auto"
+        elif ratios:
+            args["aspect_ratio_nim"] = args["aspect_ratio"] if args["aspect_ratio"] in ratios else _nearest_ratio(w, h, ratios)
         return [self._call("image", args, cancelled)]
 
     def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False, extra_urls=()):

@@ -1,6 +1,6 @@
 # Render Post — Behavior Map
 
-> Last verified against: v1.12.0
+> Last verified against: v1.12.1
 
 This is a map of how Render Post actually behaves: what happens when you click something, where
 that gets saved, and what logic decides the result. It is **not** a user guide (that's
@@ -601,6 +601,30 @@ sound variants are real but notably pricier and not exposed yet; its flat per-re
 confirmed via the free preflight, not run for real). `seedance-2-5-nim` also gained its full
 480p/720p/1080p resolution range this pass (previously fixed to 720p only, pending exactly this free
 per-tier price check) — still not run through an actual generation itself, same reason as Kling.
+
+**Third pass, same branch, same day: a real aspect-ratio bug in every Nim image model, found live
+by Filip testing GPT Image 2.5 Flare on a 2:3 render.** Output came back 16:9 regardless of the
+source's own aspect — Nim defaults to a flat 16:9 whenever `requestedAspectRatio` is simply omitted,
+which every Nim image model's template did (the field was never sent at all before this fix; see
+§3.11's second subsection above, which only ever covered `resolution`/`requestedAspectRatio` as
+things a *video* model might forbid, never that an *image* model's own aspect ratio needed sending
+at all). Higgsfield and fal were never affected — this is Nim-specific, found by testing the real
+thing, not inferred from either of their own behavior. Two real shapes, both verified live against
+Nim's own model catalog: Nano Banana Pro Edit/2 accept a literal `"auto"` value and preserve the
+input's own aspect directly, no computation needed; GPT Image 2.5 Flare/Sunburst have no `"auto"`
+option at all and need a real value from their own 9-item enum (`16:9`/`9:16`/`1:1`/`4:3`/`3:4`/
+`3:2`/`5:4`/`4:5`/`2:3`). A new helper, `_nearest_ratio(w, h, allowed)`, picks whichever of a
+model's allowed ratios is numerically closest to the source image's real `w/h` when the exact
+computed fraction (already available as `edit()`'s own `"aspect_ratio"` arg, reduced via `gcd`)
+isn't itself one of the allowed values — Filip's own 2:3 render happened to be an exact match (`2:3`
+is in GPT's enum), so his case needed no snapping at all, just sending the field in the first place.
+Each Nim image catalog entry now declares `"nim_aspect_ratios"`: either the literal string `"auto"`
+or that model's own allowed list; `AggregatorProvider.edit()` reads it and sets a new `"aspect_ratio_
+nim"` template variable accordingly, referenced by `requestedAspectRatio` in the provider's image
+template. Confirmed correct via the real template-fill pipeline for an exact match, a snapped match,
+and `"auto"` — not yet re-confirmed with another live generation after Filip's original report (the
+mechanism was verified end to end through the same code path his real generation used, just not
+re-run against the live API a second time before this session ended).
 
 ## 4. AI / prompt-brief reference
 
