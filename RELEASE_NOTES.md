@@ -1,22 +1,20 @@
-## Render Post v1.10.0
+## Render Post v1.11.0
 
-Image and video **generation** (not prompt-writing, not vision analysis — those always stay on
-fal) can now be sent to a third-party aggregator instead of fal.ai, chosen per model in the
-existing Model / Video model dropdowns, exactly like switching between GPT Image and Nano Banana
-today.
+Nim.video joins Higgsfield as a second built-in aggregator provider — same "pick it from the Model
+/ Video model dropdown" mechanism, no separate switch. Once connected (Connect providers →
+Nim.video, one-time browser sign-in), you get "Nano Banana Pro Edit" and "GPT Image 2.5 Flare" in
+the image picker and "Hailuo 2.3 Fast" and "Seedance 2.5" in the video picker, billed on your own
+Nim.video credits instead of a separate fal balance. Every parameter, price and upload mechanic
+was checked live against Nim's own tools rather than assumed from Higgsfield's shape — Nim turned
+out to need a genuinely different upload step (no import-by-URL; a short-lived upload slot plus a
+direct file POST) and a different reference-image shape (a flat list, not role-tagged), both now
+general engine features any future provider can also use. "Seedance 2.5 · Nim" ships with its
+resolution fixed to 720p for now (its pricing at other tiers isn't confirmed yet) and hasn't been
+run through an actual generation — try a short clip yourself before relying on it.
 
-Higgsfield ships connected-and-ready, with eight models next to their fal counterparts once you
-connect it (same underlying models, different billing path — Higgsfield draws on your existing
-subscription credits instead of a separate paid balance): "GPT Image 2.5 Flare/Sunburst",
-"Nano Banana Pro", "Nano Banana 2" and "Seedance 2.5 · Higgsfield" in the image/video pickers, plus
-"Kling 3.0", "MiniMax H3" and "Veo 3.1 · Higgsfield" as video-only additions. GPT Image 2.5 via
-Higgsfield now has its own Quality selector alongside Resolution (previously fixed to Medium);
-Kling 3.0 and Veo 3.1 likewise gained a Resolution control for their real quality tiers (previously
-fixed to one tier each). New "Connect providers" button next to Change key handles the one-time
-setup: an API-key form, or a one-time "Connect" for anything using OAuth — after that one click,
-every actual generation job runs headless, same as fal. A provider's models only show up in the
-dropdowns once it's connected, and disconnecting reverts to fal-only immediately. Artlist and
-Nim.video aren't wired up yet; the same mechanism is ready for them once their connection details
-are worked out. Anyone can add their own provider too — "Add a custom provider" now explains how.
+Also in this release: the MiniMax H3 character-reference fix from 1.10.0 was re-confirmed working
+end-to-end this session (no code change needed).
 
-Nothing else changed since 1.9.0.
+Artlist is next, once its own connection details are worked out.
+
+Nothing else changed since 1.10.0.

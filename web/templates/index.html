@@ -233,9 +233,12 @@
         <span class="mono">operations.&lt;image|video&gt;.steps</span> list of MCP tool calls. Use this when a
         vendor's plain REST API is billed separately from a subscription you already have (its MCP surface
         often isn't) — this is how Higgsfield is connected in the example below.</p>
-      <p class="hint">A ready, field-verified example: <span class="mono">docs/provider-example-higgsfield.json</span>
-        in the repo — paste its <span class="mono">definition</span> object here with id
-        <span class="mono">higgsfield</span> to connect it for real.</p>
+      <p class="hint">Two ready, field-verified examples in the repo:
+        <span class="mono">docs/provider-example-higgsfield.json</span> and
+        <span class="mono">docs/provider-example-nim.json</span> — paste either one's
+        <span class="mono">definition</span> object here with its own id
+        (<span class="mono">higgsfield</span> or <span class="mono">nim</span>) to connect it for real,
+        though both already ship built in below.</p>
       <input class="field" id="customproviderid" placeholder="id, e.g. higgsfield" spellcheck="false">
       <textarea class="field mono" id="customproviderjson" rows="8" spellcheck="false" placeholder='{"label": "...", "transport": "rest_async", "base_url": "https://...", "auth": {...}, "operations": {"image": {...}, "video": {...}}}'></textarea>
       <div class="err" id="customprovidererr" hidden></div>

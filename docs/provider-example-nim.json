@@ -1,0 +1,72 @@
+{
+  "_readme": "A verified, working Nim.video provider definition for RenderPost's aggregator framework (see docs/BEHAVIOR_MAP.md §3.11 and the 'Connect providers' settings panel). This exact definition ships built into RenderPost.py's PROVIDERS dict — this file exists as a readable reference and as a template for adding another provider the same way. Every endpoint, field name and response shape here was confirmed live against the real Nim.video MCP server on 2026-10-03 (Dynamic Client Registration via a direct unauthenticated HTTP request, a real image edit, and a real image-to-video generation — not guessed from documentation or assumed from Higgsfield's shape, which differs in three real ways: no import-by-URL, a flat fileInputs array instead of role-tagged objects, and a multi-valued terminal status). Uses mcp_http so generation draws on an existing Nim.video subscription's credit pool.",
+  "id": "nim",
+  "definition": {
+    "label": "Nim.video",
+    "transport": "mcp_http",
+    "mcp_url": "https://mcp.nim.video/mcp",
+    "auth": {
+      "type": "oauth2",
+      "authorize_url": "https://mcp.nim.video/mcp/authorize",
+      "token_url": "https://mcp.nim.video/api/mcp/oauth/token",
+      "registration_endpoint": "https://mcp.nim.video/api/mcp/oauth/register",
+      "scope": "",
+      "fields": ["access_token"]
+    },
+    "operations": {
+      "image": {
+        "steps": [
+          {"tool": "media_upload", "arguments": {}, "upload_from": "{image_url}",
+           "output_as": "media_url", "output_field": "file_url"},
+          {"tool": "media_upload", "when": "character_url", "arguments": {}, "upload_from": "{character_url}",
+           "output_as": "character_media_url", "output_field": "file_url"},
+          {"tool": "generate_image",
+           "arguments": {
+             "model_id": "3c1b1c5b-c1d6-44a8-b986-3068820f4927", "model_name": "Nano Banana Pro Edit",
+             "prompt": "{prompt}", "resolution": "2K",
+             "fileInputs": [{"_scalar": "{media_url}"},
+                            {"_scalar": "{character_media_url}", "_when": "character_media_url"}]},
+           "output_as": "workflow_id", "output_field": "workflowId"},
+          {"tool": "get_generation_status", "poll": true, "poll_done_field": "status",
+           "poll_done_value": ["finished", "failed", "cancelled", "removed"], "poll_delay": 5,
+           "arguments": {"workflowId": "{workflow_id}"}, "output_field": "mediaUrl"}
+        ]
+      },
+      "video": {
+        "steps": [
+          {"tool": "media_upload", "arguments": {}, "upload_from": "{image_url}",
+           "output_as": "media_url", "output_field": "file_url"},
+          {"tool": "generate_video",
+           "arguments": {
+             "model_id": "a321628d-c026-4ac4-bf6c-326f62fb2e3c", "model_name": "Hailuo 2.3 Fast",
+             "prompt": "{prompt}", "mediaLength": 6000,
+             "fileInputs": [{"_scalar": "{media_url}"}]},
+           "output_as": "workflow_id", "output_field": "workflowId"},
+          {"tool": "get_generation_status", "poll": true, "poll_done_field": "status",
+           "poll_done_value": ["finished", "failed", "cancelled", "removed"], "poll_delay": 5,
+           "arguments": {"workflowId": "{workflow_id}"}, "output_field": "mediaUrl"}
+        ]
+      }
+    },
+    "price": {"image": 0.078, "video": {"6s": 0.094}}
+  },
+  "verification_notes": {
+    "verified_2026-10-03": [
+      "Dynamic Client Registration against https://mcp.nim.video/api/mcp/oauth/register — plain unauthenticated POST, returns a client_id immediately; its own response (and the /.well-known/oauth-authorization-server metadata) report grant_types: [\"authorization_code\"] only, no refresh_token grant, unlike Higgsfield",
+      "No import-by-URL tool exists — a bare remote URL in fileInputs fails with error_code generation_unavailable. Real mechanism: media_upload (no arguments) returns {upload_url, method, expires_at} (~10 minute token in the query string); a plain multipart/form-data POST (field name \"file\") to that URL returns {file_id, file_url, type, content_type, status}",
+      "Minimum upload size is 300x300px — a 100x100 test image was rejected with a clear 400 before any credits were spent",
+      "generate_image/generate_video response once queued: {workflowId, promptId, status: \"queued\", estimatedCreditCost, ...} — poll get_generation_status with {workflowId} until status reaches one of finished/failed/cancelled/removed; result image/video is in mediaUrl",
+      "Nano Banana Pro Edit (geminiNanoBananaV2Consistency): 25 credits at 2K, real generation completed end to end",
+      "GPT Image 2.5 Flare Medium (runwareOpenaiGptImage25FlareConsistencyMedium): 8 credits actual charge (Nim's own note: base price plus ~2 credits/megapixel of reference images), real generation completed end to end. The plain, non-\"runware\"-prefixed GPT Image Editing family (gptConsistencyLow/High) failed with generation_unavailable even with a confirmed-good upload — avoid it",
+      "Hailuo 2.3 Fast (falMinimaxHailuo2.3FastStandardImage2Video): 30 credits for a 6s clip, real generation completed end to end. Only allows durationsMs [6000, 10000]; forbids both \"resolution\" and \"requestedAspectRatio\" entirely — sending either may be rejected",
+      "Seedance 2.5 (seedanceV25ImageToVideo): 250 credits at the default 5s/720p per its own models_explore price estimate (50 credits/second) — parameters confirmed via its generationContract, but NOT run through an actual generation this session (cost exceeded the remaining per-session spend authorization)"
+    ],
+    "not_verified": [
+      "Seedance 2.5's actual generation behavior (only its live-fetched schema/price was checked, not a real run)",
+      "Per-resolution pricing for Seedance 2.5 at 480p/1080p (only the 720p default price point was exposed by models_explore)",
+      "Hailuo 2.3 Fast's price at its other allowed duration (10s) — only the 6s default was priced",
+      "Two-reference-image requests (character reference) specifically for Nim — the conditional upload/fileInputs path reuses the same mechanism verified with one reference, but hasn't itself been run with two",
+      "GPT Image 2.5 Flare/Sunburst at Low/High quality tiers — only Medium was run; each quality tier is a distinct model_id on Nim, unlike Higgsfield's single adjustable quality parameter"
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 # Render Post — Behavior Map
 
-> Last verified against: v1.10.0
+> Last verified against: v1.11.0
 
 This is a map of how Render Post actually behaves: what happens when you click something, where
 that gets saved, and what logic decides the result. It is **not** a user guide (that's
@@ -492,6 +492,62 @@ mutator function change just `providers`/`custom_providers` before writing back 
 real concurrent stress (multiple threads hammering unrelated saves against a thread toggling
 connect/disconnect). The wider pre-existing pattern (every other setting in `config.json`) still
 has the same theoretical race and isn't fixed by this change.
+
+**Second built-in provider, Nim.video — same engine, three real differences from Higgsfield, each
+confirmed live rather than assumed from Higgsfield's shape:**
+
+1. **No import-by-URL.** Higgsfield's `media_import_url` takes a bare remote URL; Nim has no
+   equivalent tool at all — a bare URL placed directly in `fileInputs` fails with
+   `generation_unavailable` (confirmed live). Nim's real mechanism is two-phase: `media_upload`
+   (no arguments) mints a short-lived upload slot (`upload_url`, a ~10-minute JWT in the query
+   string), then the actual file bytes go up as a plain `multipart/form-data` POST to that URL —
+   not a second MCP tool call. This needed a genuinely new step primitive, `"upload_from":
+   "<template>"` on a step (handled by `_mcp_upload_step()`, dispatched from `_mcp_run_steps()`'s
+   step loop alongside the existing plain-call and `poll` branches): it runs the mint call, then
+   fetches the bytes from wherever `upload_from` resolves to (normally `{image_url}`, the
+   fal-hosted source) and POSTs them itself. Nim also enforces a minimum 300×300px upload size
+   (confirmed via a real rejection on a 100×100 test image) — not handled specially, since every
+   real render folder image is already far larger.
+2. **Flat reference arrays, not role-tagged objects.** Higgsfield's `medias` is `[{value, role},
+   ...]`; Nim's `fileInputs` is `[url, url, ...]` — plain strings, no role tag (a reference image
+   vs. a start frame isn't distinguished at this level for Nim's Basic/Consistency models). The
+   existing `"_when"` conditional-drop mechanism only worked on dict-shaped list items, so
+   `_fill_template()` gained a second wrapper form, `{"_scalar": "<template>", "_when": "<arg>"}`
+   — filled and returned as the bare value instead of a dict (still honoring `"_when"`), letting a
+   flat array conditionally include a second plain-string reference the same way Higgsfield's
+   `medias` conditionally includes a second tagged one.
+3. **A multi-valued terminal status, not one done flag.** Higgsfield's `jobs_wait` exposes a single
+   `all_terminal` boolean; Nim's `get_generation_status` instead reaches one of four terminal
+   *strings* (`finished`/`failed`/`cancelled`/`removed`) in its own `status` field — confirmed live
+   by watching real generations complete. The poll loop's `"poll_done_value"` can now be a list as
+   well as a scalar (membership check instead of equality) so a Nim poll step's
+   `"poll_done_value": ["finished", "failed", "cancelled", "removed"]` stops polling on any of the
+   four instead of hanging to `poll_max_attempts` on a failure.
+
+Also confirmed live and worth recording since they're easy to get wrong by analogy with
+Higgsfield: Nim's OAuth app (`mcp.nim.video`) supports the same Dynamic Client Registration flow
+Higgsfield's does (direct unauthenticated HTTP test against `/api/mcp/oauth/register`), but its
+discovery metadata and DCR response both report `grant_types: ["authorization_code"]` only — no
+`refresh_token` grant, unlike Higgsfield — so its `PROVIDERS` entry declares `"fields":
+["access_token"]` only; `_refresh_oauth()` already no-ops correctly for any provider with no stored
+`refresh_token`, so this needed no code change, just the right catalog data. Nim's own `GPT Image
+2.5 Flare/Sunburst` family splits quality tiers into separate `model_id`s rather than Higgsfield's
+single adjustable `quality` parameter — confirmed via its model catalog, not guessed — so the new
+`gpt-image-2.5-flare-nim` catalog entry is fixed to the Medium-quality `model_id` for now (no
+quality selector shown), deferring a future per-tier `model_id` switch to match the live-verified
+breadth Higgsfield's `gptres` kind already has. One Nim model family was found genuinely broken
+during this work (`gptConsistencyLow`/`High`, the plain, non-"runware"-prefixed GPT Image Editing
+models — failed with `generation_unavailable` even with a confirmed-good upload, while an
+`isChatRecommended` model with an identical request shape succeeded immediately right after) — not
+used in the catalog; the `runwareOpenaiGptImage25Flare/Sunburst...` family works and is what's
+shipped. Dollar price estimates for Nim models use $0.003125/credit (Nim's published Pro plan,
+$12.50/mo for 4000 credits — confirmed to match this account's own credit-balance cap, not a number
+Nim exposes directly through its MCP tools), the same "verify against your own plan tier" caveat
+Higgsfield's estimates already carry. `seedance-2-5-nim` was added from Nim's live model catalog
+(real `model_id`, parameters and the one 720p/5s price point Nim's tools exposed) but, unlike every
+other model this session added, was not run through an actual generation — its cost at the model's
+own minimum duration exceeded what remained of this session's spend authorization — so its
+resolution is fixed to the one verified-priced tier (720p) until someone runs it for real.
 
 ## 4. AI / prompt-brief reference
 

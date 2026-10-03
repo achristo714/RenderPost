@@ -48,7 +48,7 @@ from prompts import (
 )
 
 APP_NAME = "RenderPost"
-APP_VERSION = "1.10.0"
+APP_VERSION = "1.11.0"
 # Optional: where the exe checks for a newer release. Point this at your GitHub repo's
 # latest-release API and the header shows an "Update available" link when a newer tag exists.
 # e.g. "https://api.github.com/repos/YOURNAME/renderpost/releases/latest"   ("" = don't check)
@@ -88,6 +88,19 @@ MODELS = {
     "nano-banana-2-higgsfield":   {"label": "Nano Banana 2 · Google, fast", "kind": "nano", "provider": "higgsfield", "recommended": True,
                         "higgsfield_model": "nano_banana_2", "quality": None, "price": 0.0495, "mult": {"1K": 1, "2K": 1.333, "4K": 2},
                         "hint": "same Google model as the fal Nano Banana 2 entry · fastest and cheapest of the pair · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first"},
+    # Nim.video dollar estimates below: its own credit balance has no public $/credit rate exposed
+    # through the MCP tools (can't preview a credit-pack purchase headlessly either), so the figure
+    # used is $12.50/month for 4000 credits (Nim's own published Pro plan, confirmed live to match
+    # this account's own subscriptionCredits.max of 4000) = $0.003125/credit — verify against your
+    # own plan tier before trusting the dollar figure; the credit count itself is exact.
+    "nano-banana-pro-edit-nim": {"label": "Nano Banana Pro Edit · Google", "kind": "nano", "provider": "nim", "recommended": True,
+                        "nim_model": "3c1b1c5b-c1d6-44a8-b986-3068820f4927", "nim_model_name": "Nano Banana Pro Edit",
+                        "quality": None, "price": 0.078, "mult": {"1K": 1, "2K": 1, "4K": 1},
+                        "hint": "same Google model Higgsfield also offers · best at preserving identity/character detail across edits · verified live, 25 credits at 2K (about $0.08 on a $12.50/mo Nim Pro plan) · connect Nim.video first"},
+    "gpt-image-2.5-flare-nim": {"label": "GPT Image 2.5 Flare · OpenAI", "kind": "nano", "provider": "nim", "recommended": True,
+                        "nim_model": "01f73222-3ce4-4470-9352-afa375155d1a", "nim_model_name": "GPT Image 2.5 Flare",
+                        "quality": None, "price": 0.019, "mult": {"1K": 1, "2K": 1, "4K": 1},
+                        "hint": "same OpenAI model as the fal/Higgsfield Flare entries, fixed to Medium quality for now — Nim bills each GPT Image quality tier as a separate model id, unlike fal/Higgsfield's single adjustable parameter · verified live, 6-8 credits (about $0.02-0.03 on a $12.50/mo Nim Pro plan) · connect Nim.video first"},
 }
 RES_OPTIONS = {"1K": "1K (about 1024px)", "2K": "2K (about 2048px)", "4K": "4K (about 4096px)"}
 
@@ -130,6 +143,21 @@ VIDEO_MODELS = {
                  "res": {"basic": "Basic · iterate here", "high": "High", "ultra": "Ultra · final"},
                  "durations": {"4": "4 s", "6": "6 s", "8": "8 s"}, "min_duration": 4,
                  "price": {"basic": 0.132, "high": 0.132, "ultra": 0.297}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
+    # Nim.video dollar estimates: see the note above MODELS' Nim entries — $0.003125/credit, a Nim
+    # Pro-plan ($12.50/mo, 4000 credits) figure confirmed to match this account's own credit balance,
+    # not Nim's own stated number (it doesn't publish one through the MCP tools).
+    "hailuo-2-3-fast-nim": {"label": "Hailuo 2.3 Fast · MiniMax", "provider": "nim", "recommended": True,
+                 "nim_model": "a321628d-c026-4ac4-bf6c-326f62fb2e3c", "nim_model_name": "Hailuo 2.3 Fast",
+                 "resolution": None,   # forbidden param for this model at the API level — verified live
+                 "hint": "single reference frame, no resolution control (one fixed tier) · fixed to 6s for now — Nim also allows 10s but its credit cost wasn't confirmed · verified live, 30 credits for 6s (about $0.09 on a $12.50/mo Nim Pro plan) · connect Nim.video first",
+                 "res": None, "min_duration": 6, "durations": {"6": "6 s"},
+                 "price": {"flat": 0.094}},
+    "seedance-2-5-nim": {"label": "Seedance 2.5 · ByteDance", "provider": "nim", "recommended": True,
+                 "nim_model": "dc224f67-6752-4eaf-aa7d-10f20b810bb0", "nim_model_name": "Seedance 2.5",
+                 "resolution": "720p",   # fixed: Nim's per-resolution pricing for this model isn't confirmed beyond 720p, so no selector is shown yet
+                 "hint": "same ByteDance model Higgsfield also offers · fixed to 720p for now (other resolutions' Nim pricing not yet confirmed) · parameters verified against Nim's own live model catalog — not yet run through an actual generation (its cost at the minimum 4s was higher than this session's remaining verification budget allowed), so try one short clip yourself first · runs on your Nim.video credits, 50 credits/second at 720p (about $0.16/s on a $12.50/mo Nim Pro plan) · connect Nim.video first",
+                 "res": None, "min_duration": 4,
+                 "price": {"flat": 0.15625}},
 }
 # These two Higgsfield video models accept a character image as a second reference alongside the
 # start frame (verified working in Higgsfield's own web UI); others ignore it. Clip-generation only
@@ -230,6 +258,56 @@ PROVIDERS = {"higgsfield": {
              "poll_delay_field": "poll_after_seconds", "poll_delay": 5,
              "arguments": {"jobs": [{"index": 0, "job_id": "{job_id}"}], "timeout_seconds": 15},
              "output_field": "jobs.0.result_url"}]},
+    }},
+    "nim": {
+    "label": "Nim.video", "transport": "mcp_http", "mcp_url": "https://mcp.nim.video/mcp",
+    # Verified live (direct unauthenticated HTTP, not guessed from docs): Nim's OAuth metadata and
+    # its Dynamic Client Registration response both report grant_types ["authorization_code"] only —
+    # no refresh_token grant, unlike Higgsfield. "fields" reflects that: _refresh_oauth() silently
+    # no-ops for this provider (self.creds never has a "refresh_token" to trade in), which is the
+    # correct behavior here, not a gap — a stale/expired access_token just means reconnecting.
+    # Nim's discovery metadata advertises no scope list at all, so none is requested here either.
+    "auth": {"type": "oauth2", "authorize_url": "https://mcp.nim.video/mcp/authorize",
+             "token_url": "https://mcp.nim.video/api/mcp/oauth/token",
+             "registration_endpoint": "https://mcp.nim.video/api/mcp/oauth/register",
+             "scope": "", "fields": ["access_token"]},
+    "operations": {
+        # Nim has no by-URL media import (verified live: a bare remote URL in "fileInputs" fails
+        # with "generation_unavailable") — every reference image goes through media_upload's two-phase
+        # mint-then-POST ("upload_from", see _mcp_upload_step) instead of a single import-by-URL call.
+        "image": {"steps": [
+            {"tool": "media_upload", "arguments": {}, "upload_from": "{image_url}",
+             "output_as": "media_url", "output_field": "file_url"},
+            {"tool": "media_upload", "when": "character_url", "arguments": {}, "upload_from": "{character_url}",
+             "output_as": "character_media_url", "output_field": "file_url"},
+            {"tool": "generate_image", "arguments": {
+                "model_id": "{nim_model}", "model_name": "{nim_model_name}", "prompt": "{prompt}",
+                "resolution": "{resolution_upper}",
+                # Nim's own "fileInputs" is a flat array of plain URL strings, not Higgsfield's
+                # role-tagged {value, role} objects — "_scalar" fills each item as a bare string
+                # instead of a dict (see _fill_template's docstring).
+                "fileInputs": [{"_scalar": "{media_url}"},
+                                {"_scalar": "{character_media_url}", "_when": "character_media_url"}]},
+             "output_as": "workflow_id", "output_field": "workflowId"},
+            {"tool": "get_generation_status", "poll": True, "poll_done_field": "status",
+             # Nim's status field reaches one of four terminal strings, not a single done flag —
+             # verified live (finished/failed/cancelled/removed) — see poll_done_value-as-list above.
+             "poll_done_value": ["finished", "failed", "cancelled", "removed"], "poll_delay": 5,
+             "arguments": {"workflowId": "{workflow_id}"}, "output_field": "mediaUrl"}]},
+        "video": {"steps": [
+            {"tool": "media_upload", "arguments": {}, "upload_from": "{image_url}",
+             "output_as": "media_url", "output_field": "file_url"},
+            {"tool": "media_upload", "when": "character_url", "arguments": {}, "upload_from": "{character_url}",
+             "output_as": "character_media_url", "output_field": "file_url"},
+            {"tool": "generate_video", "arguments": {
+                "model_id": "{nim_model}", "model_name": "{nim_model_name}", "prompt": "{prompt}",
+                "mediaLength": "{duration_ms}", "resolution": "{resolution}",
+                "fileInputs": [{"_scalar": "{media_url}"},
+                                {"_scalar": "{character_media_url}", "_when": "character_media_url"}]},
+             "output_as": "workflow_id", "output_field": "workflowId"},
+            {"tool": "get_generation_status", "poll": True, "poll_done_field": "status",
+             "poll_done_value": ["finished", "failed", "cancelled", "removed"], "poll_delay": 5,
+             "arguments": {"workflowId": "{workflow_id}"}, "output_field": "mediaUrl"}]},
     }}}
 PROVIDER_TRANSPORTS = ("rest_async", "rest_sync", "mcp_http")
 VIDEO_DURATIONS = {"4": "4 s", "5": "5 s", "6": "6 s", "8": "8 s", "10": "10 s", "12": "12 s", "15": "15 s"}
@@ -914,6 +992,12 @@ def _fill_template(node, args):
     not be present) gets conditionally included in a fixed-shape list like a "medias" array, without
     the provider template needing to know whether one was actually passed.
 
+    A dict may instead carry a "_scalar": <template> key — it's filled and returned as that bare
+    value (still subject to "_when" above) rather than as a dict, for a provider whose reference
+    list is a flat array of strings rather than Higgsfield's role-tagged {value, role} objects (e.g.
+    Nim.video's "fileInputs": [url, url]) — "_when" alone can't conditionally drop a bare string from
+    a list (there's no dict to hang the key off), so this wraps one just long enough for that check.
+
     A key whose filled value is exactly None is dropped from its parent dict entirely, rather than
     sent as a literal null — this is how one shared operation template (e.g. Higgsfield's "video"
     operation, reused by several different underlying models with different parameter schemas) omits
@@ -932,6 +1016,8 @@ def _fill_template(node, args):
             if not args.get(node["_when"]):
                 return _TEMPLATE_SKIP
             node = {k: v for k, v in node.items() if k != "_when"}
+        if "_scalar" in node:
+            return _fill_template(node["_scalar"], args)
         filled = {k: _fill_template(v, args) for k, v in node.items()}
         return {k: v for k, v in filled.items() if v is not None}
     if isinstance(node, list):
@@ -989,6 +1075,31 @@ async def _mcp_call_once(session, step, args):
     return data
 
 
+async def _mcp_upload_step(session, step, args):
+    """Mint a short-lived upload slot via an MCP tool (Nim.video's media_upload — called with
+    whatever "arguments" the step declares, typically none), then push the actual file bytes to
+    that slot as a plain multipart/form-data HTTP POST — not a second MCP tool call. Confirmed
+    live that Nim has no by-URL import tool at all (a bare remote URL in "fileInputs" fails with
+    "generation_unavailable") and that media_upload's returned URL already carries its own
+    short-lived auth token in the query string, so no extra header is sent on the POST."""
+    mint = await _mcp_call_once(session, step, args)
+    upload_url = _dig(mint, step.get("upload_url_field", "upload_url"))
+    if not upload_url:
+        raise RuntimeError(f"MCP tool \"{step['tool']}\" did not return an upload URL.")
+    source = _fill_template(step["upload_from"], args)
+    req = urllib.request.Request(source, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        file_bytes = r.read()
+    boundary = uuid.uuid4().hex
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"upload.bin\"\r\n"
+            f"Content-Type: application/octet-stream\r\n\r\n").encode("utf-8") + file_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    up_req = urllib.request.Request(upload_url, data=body, method="POST",
+                                      headers={"Content-Type": f"multipart/form-data; boundary={boundary}",
+                                               "User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+    with urllib.request.urlopen(up_req, timeout=120) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
 async def _mcp_run_steps(url, headers, steps, args, cancelled):
     """Run an ordered sequence of MCP tool calls against a remote (Streamable HTTP) MCP server —
     e.g. upload an image, generate, wait for the job, fetch the result — accumulating each step's
@@ -1000,9 +1111,18 @@ async def _mcp_run_steps(url, headers, steps, args, cancelled):
 
     A step with "poll": true (e.g. a long-poll status/wait tool like Higgsfield's jobs_wait, which
     only blocks up to ~15s per call and expects to be called again until done) repeats the SAME
-    tool call until "poll_done_field" reads "poll_done_value" (default: true), sleeping between
-    attempts — for however long the response's own "poll_delay_field" says to wait (falling back to
-    a fixed few seconds), up to "poll_max_attempts" (default 60) before giving up."""
+    tool call until "poll_done_field" reads "poll_done_value" (default: true) — or, if
+    "poll_done_value" is a list (e.g. Nim.video's get_generation_status, verified live to reach one
+    of four terminal strings: finished/failed/cancelled/removed, not a single done flag), until it
+    reads any value in that list — sleeping between attempts for however long the response's own
+    "poll_delay_field" says to wait (falling back to a fixed few seconds), up to "poll_max_attempts"
+    (default 60) before giving up.
+
+    A step with "upload_from": "<template>" (e.g. Nim.video's media_upload, verified live to have no
+    import-by-URL tool at all) is a two-phase upload instead of a plain tool call: the MCP tool call
+    mints a short-lived upload slot, then this app itself POSTs the actual file bytes — fetched from
+    the URL "upload_from" resolves to — straight to that slot as a plain multipart/form-data
+    request, no MCP tool call for the byte transfer itself. See _mcp_upload_step()."""
     import mcp
     import httpx2
     from mcp.client.streamable_http import streamable_http_client
@@ -1022,12 +1142,18 @@ async def _mcp_run_steps(url, headers, steps, args, cancelled):
                     if cancelled():
                         raise Cancelled()
                     data = await _mcp_call_once(session, step, args)
-                    if _dig(data, done_field) == done_value:
+                    val = _dig(data, done_field)
+                    done = (val in done_value) if isinstance(done_value, (list, tuple)) else (val == done_value)
+                    if done:
                         break
                     delay = _dig(data, step.get("poll_delay_field", "")) or step.get("poll_delay", 3)
                     await asyncio.sleep(float(delay))
                 else:
                     raise RuntimeError(f"MCP tool \"{step['tool']}\" never reported done after {step.get('poll_max_attempts', 60)} attempts.")
+            elif step.get("upload_from"):
+                if cancelled():
+                    raise Cancelled()
+                data = await _mcp_upload_step(session, step, args)
             else:
                 if cancelled():
                     raise Cancelled()
@@ -1199,7 +1325,10 @@ class AggregatorProvider:
         args = {"prompt": prompt, "image_url": image_url, "image_urls": [image_url] + list(extra_urls),
                 "character_url": extra_urls[0] if extra_urls else "",
                 "width": w, "height": h, "aspect_ratio": f"{int(w)//g}:{int(h)//g}",
-                "resolution": str(cfg.get("resolution", "")).lower(), "quality": cfg.get("quality", ""),
+                "resolution": str(cfg.get("resolution", "")).lower(),
+                # Same value, original case ("1K"/"2K"/"4K") — Higgsfield's API wants it lowercased
+                # (above), but Nim.video's allowedValues are exact-case "1K"/"2K"/"4K"; verified live.
+                "resolution_upper": cfg.get("resolution", ""), "quality": cfg.get("quality", ""),
                 **cfg.get("_model_extra", {})}
         return [self._call("image", args, cancelled)]
 
@@ -1216,8 +1345,9 @@ class AggregatorProvider:
         # character reference there has to replace start_image's role with image_references too,
         # not add alongside it. "char_ref_exclusive" on the catalog entry opts a model into that.
         frame_role = "image_references" if (extra_urls and extra.get("char_ref_exclusive")) else "start_image"
+        duration = int(cfg.get("take_duration") if take else cfg.get("video_duration") or 0)
         args = {"prompt": prompt, "image_url": image_urls[0], "image_urls": list(image_urls),
-                "duration": int(cfg.get("take_duration") if take else cfg.get("video_duration") or 0),
+                "duration": duration, "duration_ms": duration * 1000,   # Nim.video's "mediaLength" is milliseconds, not seconds
                 res_key: cfg.get("video_res", ""),
                 "character_url": extra_urls[0] if extra_urls else "",
                 "frame_role": frame_role,
