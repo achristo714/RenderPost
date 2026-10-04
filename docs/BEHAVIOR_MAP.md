@@ -1,6 +1,6 @@
 # Render Post — Behavior Map
 
-> Last verified against: v1.12.1
+> Last verified against: v1.12.2
 
 This is a map of how Render Post actually behaves: what happens when you click something, where
 that gets saved, and what logic decides the result. It is **not** a user guide (that's

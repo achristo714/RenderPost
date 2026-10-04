@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.12.2
+- Fix: the exe build failed in CI (and would fail locally too) — `--collect-all mcp` makes PyInstaller import every submodule under `mcp` to discover hidden imports, including `mcp.cli.cli`, which unconditionally imports `typer`. RenderPost never uses `mcp`'s CLI (only `ClientSession`/`client.streamable_http`), but `typer` wasn't installed, so that import crashed the whole build before it could produce an exe. Added `typer` to `requirements.txt` — confirmed fixed with a real local `build.bat`-equivalent build and a working `RenderPost.exe` launched afterward. (Filip Filyov)
+
 ## 1.12.1
 - Fix: GPT Image 2.5 Flare/Sunburst via Nim.video always came back 16:9 regardless of the source image's own aspect ratio — Nim defaults to a flat 16:9 whenever `requestedAspectRatio` is simply omitted, which every Nim image model did until now. Now sends the source's real aspect ratio when it's one of Nim's supported values, or the closest one when it isn't (a new `_nearest_ratio()` helper); Nano Banana Pro Edit/2 use Nim's own `"auto"` option instead, which matches the input directly. Higgsfield and fal were never affected — found live, not something those paths needed. (Filip Filyov)
 
