@@ -24,8 +24,20 @@ function saveConfig(extra={}){
   saveTimer = setTimeout(() => saveNow(extra).then(render), 250);
 }
 
-function modelOpts(table, all){ return Object.fromEntries(Object.entries(table).filter(([k,v]) => all || v.recommended).map(([k,v]) => [k, v.label])); }
-function syncModel(){ const m = S.models[$("#model").value]; if (!m) return; $("#setup").dataset.kind = m.kind; $("#modelhint").textContent = m.hint + (m.price ? " · fal rates as of Aug 2026" : ""); }
+function providerOk(v){ return !v.provider || v.provider === "fal" || (S.providers[v.provider] && S.providers[v.provider].connected); }
+function modelOpts(table, all){
+  return Object.fromEntries(Object.entries(table).filter(([k,v]) => (all || v.recommended) && providerOk(v))
+    .map(([k,v]) => [k, v.provider && v.provider !== "fal" ? `${v.label} · ${(S.providers[v.provider]||{}).label || v.provider}` : v.label]));
+}
+function syncModel(){ const m = S.models[$("#model").value]; if (!m) return; $("#setup").dataset.kind = m.kind;
+  // A model whose real quality tiers don't match the fal-wide default set (verified live: Nim's
+  // GPT Image 2.5 Flare/Sunburst only offer Low/Medium/High, each a separate provider-side model)
+  // declares its own "quality_opts" dict to restrict/relabel the selector, same way a video
+  // model's own "durations" already restricts the Duration selector below.
+  const qcur = $("#quality").value, qOpts = m.quality_opts || S.quality_options;
+  fill($("#quality"), qOpts, qOpts[qcur] ? qcur : Object.keys(qOpts)[0]);
+  const rates = m.price ? (m.provider && m.provider !== "fal" ? ` · ${(S.providers[m.provider]||{}).label || m.provider} rates` : " · fal rates as of Aug 2026") : "";
+  $("#modelhint").textContent = m.hint + rates; }
 function fillModels(){
   const extra = Object.values(S.models).some(v => !v.recommended) || Object.values(S.video.models).some(v => !v.recommended);
   for (const el of document.querySelectorAll(".showall")) el.hidden = !extra;
@@ -39,14 +51,20 @@ function syncVideoModel(){
   const panel = $("#vmakepanel"); panel.dataset.nores = m.res ? "0" : "1";
   if (m.res) { const cur = $("#vres").value; fill($("#vres"), m.res, m.res[cur] ? cur : Object.keys(m.res)[0]); }
   const minD = m.min_duration || 1, cur = $("#vdur").value;
-  fill($("#vdur"), Object.fromEntries(Object.entries(S.video.durations).filter(([k]) => Number(k) >= minD)), Number(cur) >= minD ? cur : String(minD));
+  const durOpts = m.durations || Object.fromEntries(Object.entries(S.video.durations).filter(([k]) => Number(k) >= minD));
+  fill($("#vdur"), durOpts, durOpts[cur] ? cur : Object.keys(durOpts)[0]);
   $("#vmodelhint").textContent = m.hint || "";
+}
+function imgCost(m){
+  if (m.price_table) return (m.price_table[$("#quality").value] || {})[$("#resolution").value] || 0;
+  if (m.price) return m.price * (m.mult[$("#resolution").value] || 1);
+  return null;
 }
 function estimate(count){
   const m = S.models[$("#model").value], n = Number($("#variations").value);
-  if (!m.price) return `${count * n} generation${count*n===1?"":"s"} · token priced`;
-  const cost = m.price * (m.mult[$("#resolution").value] || 1) * n * count;
-  return `${count * n} generation${count*n===1?"":"s"} · about $${cost.toFixed(2)}`;
+  const per = imgCost(m);
+  if (per == null) return `${count * n} generation${count*n===1?"":"s"} · token priced`;
+  return `${count * n} generation${count*n===1?"":"s"} · about $${(per * n * count).toFixed(2)}`;
 }
 function fill(sel, opts, val){ sel.innerHTML = Object.entries(opts).map(([k,v]) => `<option value="${k}"${k===val?" selected":""}>${v}</option>`).join(""); }
 
@@ -97,6 +115,9 @@ async function boot(){
   $("#catalogbtn").addEventListener("click", () => { $("#catalogurl").value = (S.catalog && S.catalog.url) || ""; $("#catalogstatus").innerHTML = catalogLine(); $("#catalogmodal").hidden = false; });
   $("#catalogcancel").addEventListener("click", () => $("#catalogmodal").hidden = true);
   $("#catalogsave").addEventListener("click", async () => { await api("/api/config", {catalog_url: $("#catalogurl").value}); setTimeout(() => location.reload(), 600); });
+  $("#providersbtn").addEventListener("click", openProvidersModal);
+  $("#providerscancel").addEventListener("click", () => $("#providersmodal").hidden = true);
+  $("#customprovidersave").addEventListener("click", saveCustomProvider);
   $("#charnote").value = S.config.character_note || ""; $("#chardesc").value = S.character.desc || "";
   $("#charnote").addEventListener("input", () => saveConfig());
   $("#chargen").addEventListener("click", async () => { const b = $("#chargen"); b.disabled = true; b.textContent = "Generating"; const r = await api("/api/character/generate", {description: $("#chardesc").value}); b.disabled = false; b.textContent = "Generate"; if (r.need_key) { openKey(false); return; } if (r.error) { toast(r.error); return; } await poll(); renderChar(); });
@@ -186,7 +207,71 @@ async function deletePhrase(id){
   phrases = r.phrases || phrases;
   openPhraseModal();
 }
-document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#phrasemodal").hidden) $("#phrasemodal").hidden = true; });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#phrasemodal").hidden) $("#phrasemodal").hidden = true; if (e.key === "Escape" && !$("#providersmodal").hidden) $("#providersmodal").hidden = true; });
+
+function renderProviders(){
+  const list = $("#providerlist");
+  const ids = Object.keys(S.providers || {});
+  if (!ids.length) { list.innerHTML = `<span class="none">No providers in the catalog yet. Add one below, or point Settings → catalog at one that lists them.</span>`; return; }
+  list.innerHTML = ids.map(id => {
+    const p = S.providers[id];
+    const status = p.connected ? `<span class="pstatus on"><i class="dot ok"></i>Connected</span>` : `<span class="pstatus"><i class="dot"></i>Not connected</span>`;
+    let form;
+    if (p.connected) {
+      form = `<button class="btn quiet" type="button" data-act="disconnect" data-id="${esc(id)}">Disconnect</button>`;
+    } else if (p.auth_type === "oauth2") {
+      form = `<button class="btn solid" type="button" data-act="oauth" data-id="${esc(id)}">Connect</button>`;
+    } else {
+      const fields = (p.fields || []).map(f => `<input class="field" type="password" data-field="${esc(f)}" placeholder="${esc(f)}" autocomplete="off" spellcheck="false">`).join("");
+      form = `<div class="pform">${fields}<button class="btn solid" type="button" data-act="connect" data-id="${esc(id)}">Connect</button></div>`;
+    }
+    return `<div class="provider"><div class="prow"><span class="pname">${esc(p.label)}</span>${status}</div>${form}</div>`;
+  }).join("");
+  for (const b of list.querySelectorAll('[data-act="connect"]')) b.addEventListener("click", async () => {
+    const card = b.closest(".provider");
+    const fields = {}; for (const inp of card.querySelectorAll("[data-field]")) fields[inp.dataset.field] = inp.value;
+    b.disabled = true; b.textContent = "Connecting";
+    const r = await api("/api/providers/connect", {id: b.dataset.id, fields});
+    b.disabled = false; b.textContent = "Connect";
+    if (r.error) { toast(r.error); return; }
+    await poll(); fillModels(); renderProviders();
+  });
+  for (const b of list.querySelectorAll('[data-act="disconnect"]')) b.addEventListener("click", async () => {
+    await api("/api/providers/disconnect", {id: b.dataset.id});
+    await poll(); fillModels(); renderProviders();
+  });
+  for (const b of list.querySelectorAll('[data-act="oauth"]')) b.addEventListener("click", async () => {
+    // Open the tab synchronously, in direct response to the click — a browser can otherwise treat
+    // window.open() called after an await (once the real URL is known) as an unsolicited popup and
+    // silently block it, which looks exactly like "the button does nothing". No "noopener" here:
+    // that makes browsers hand back null even though the blank tab still opens, so there'd be no
+    // way to navigate it once the real URL is known — safe to omit since we navigate it ourselves
+    // to Higgsfield's own authorize URL, not to third-party page content.
+    const tab = window.open("", "_blank");
+    const r = await api("/api/providers/oauth/start", {id: b.dataset.id});
+    if (r.error) { if (tab) tab.close(); toast(r.error); return; }
+    if (r.demo) { if (tab) tab.close(); await poll(); fillModels(); renderProviders(); toast("Connected (demo)", "ok", 2500); return; }
+    if (tab) { tab.location.href = r.url; }
+    else { toast(`Your browser blocked the popup — open this link yourself: ${r.url}`, "bad", 15000); }
+    toast("Finish connecting in the tab that just opened, then come back here.", "ok", 6000);
+    const poller = setInterval(async () => { await poll(); if ((S.providers[b.dataset.id] || {}).connected) { clearInterval(poller); fillModels(); renderProviders(); } }, 2000);
+    setTimeout(() => clearInterval(poller), 120000);
+  });
+}
+function openProvidersModal(){ renderProviders(); $("#providersmodal").hidden = false; }
+async function saveCustomProvider(){
+  const id = $("#customproviderid").value.trim();
+  $("#customprovidererr").hidden = true;
+  let def;
+  try { def = JSON.parse($("#customproviderjson").value); }
+  catch { $("#customprovidererr").textContent = "That's not valid JSON."; $("#customprovidererr").hidden = false; return; }
+  if (!id) { $("#customprovidererr").textContent = "Give it an id."; $("#customprovidererr").hidden = false; return; }
+  const r = await api("/api/providers/custom", {id, definition: def});
+  if (r.error) { $("#customprovidererr").textContent = r.error; $("#customprovidererr").hidden = false; return; }
+  $("#customproviderid").value = ""; $("#customproviderjson").value = "";
+  await poll(); fillModels(); renderProviders();
+  toast("Provider added", "ok", 2500);
+}
 async function waitForFolder(){
   // the picker runs on the desktop; poll until the folder changes or the user cancels (~2 min)
   const before = S.folder; const t0 = Date.now();
@@ -219,7 +304,7 @@ async function regen(name, rewrite){
   if (r.error) toast(r.error); poll();
 }
 let lastCount = null;
-async function poll(){ const s = await api("/api/state"); if (lastCount !== null && s.items.length > lastCount) toast(`${s.items.length - lastCount} new render${s.items.length - lastCount === 1 ? "" : "s"} found in the folder`, "ok", 4000); lastCount = s.items.length; S.items = s.items; S.active = s.active; S.picks = s.picks; S.clips = s.clips || []; S.video = s.video || S.video; S.recent = s.recent || []; S.character = s.character || {}; S.catalog = s.catalog || S.catalog; S.spend = s.spend; S.spend_alert = s.spend_alert;
+async function poll(){ const s = await api("/api/state"); if (lastCount !== null && s.items.length > lastCount) toast(`${s.items.length - lastCount} new render${s.items.length - lastCount === 1 ? "" : "s"} found in the folder`, "ok", 4000); lastCount = s.items.length; S.items = s.items; S.active = s.active; S.picks = s.picks; S.clips = s.clips || []; S.video = s.video || S.video; S.recent = s.recent || []; S.character = s.character || {}; S.catalog = s.catalog || S.catalog; S.spend = s.spend; S.spend_alert = s.spend_alert; S.providers = s.providers || {};
   if (s.latest && s.latest.version) { const u = $("#update"); u.textContent = `v${s.latest.version} available`; u.href = s.latest.url || "#"; u.hidden = false; }
   render(); }
 
@@ -234,7 +319,7 @@ function stateLine(it){
 function render(){
   const items = S.items, busy = items.filter(i => i.status === "working" || i.status === "queued").length;
   const done = items.filter(i => i.status === "done").length, failed = items.filter(i => i.status === "failed").length;
-  const mdl = S.models[S.config.model] || {}; const setting = mdl.kind === "nano" ? S.config.resolution : `${S.config.quality} · ${S.config.long_edge}px`;
+  const mdl = S.models[S.config.model] || {}; const setting = mdl.kind === "nano" ? S.config.resolution : mdl.kind === "gptres" ? `${S.config.quality} · ${S.config.resolution}` : `${S.config.quality} · ${S.config.long_edge}px`;
   $("#meta").innerHTML = [`<b>${items.length}</b> images`, "<s>·</s>", `<b>${done}</b> done`, failed ? `<s>·</s> <b>${failed}</b> failed` : "", S.picks ? `<s>·</s> <b>${S.picks}</b> picked` : "", "<s>·</s>", `${(mdl.label || "").split(" ·")[0]} · ${setting}`].join(" ");
   $("#status").innerHTML = busy ? `<i class="dot live"></i>${busy} in progress` : `<i class="dot ok"></i>idle`;
   const sp = Number(S.spend || 0), lim = Number(S.spend_alert || 10); $("#spend").innerHTML = sp > 0 ? `<i class="dot ${sp >= lim ? "warn" : ""}"></i>≈ $${sp.toFixed(2)} this project` : "";
@@ -346,7 +431,8 @@ function render(){
     const ag = $(".angles", art); if (ag) ag.addEventListener("click", async () => {
       await saveNow();
       const n = Number($("#angles").value), m = S.models[$("#model").value];
-      const cost = m.price ? ` · about $${(m.price * (m.mult[$("#resolution").value] || 1) * n).toFixed(2)}` : " · token priced";
+      const per = imgCost(m);
+      const cost = per == null ? " · token priced" : ` · about $${(per * n).toFixed(2)}`;
       if (!await ask(`Make ${n} new angles of ${it.name} ${vlabel(v, sel)} with ${m.label.split(" ·")[0]}${cost}?`, "Angles", "Make angles")) return;
       const r = await api("/api/angles", {name: it.name, file: v.file}); if (r.need_key) { openKey(false); $("#keyerr").textContent = r.error; $("#keyerr").hidden = false; return; } if (r.error) toast(r.error); poll();
     });
@@ -468,12 +554,14 @@ function renderClipCards(list, wrap, els, withStitchBox){
     const shots = (c.kind === "clip" && Number(c.shots || 1) > 1 ? ` · ${c.shots} shots` : "") + (c.vmodel && c.kind === "clip" ? " · " + (((S.video.models[c.vmodel] || {}).label || c.vmodel).split(" ·")[0]) : "");
     const dims = c.out_size ? ` · ${c.out_size[0]}×${c.out_size[1]}` : (c.resolution ? ` · ${c.resolution}` : "");
     const state = busyItem ? `<i class="dot live"></i>${esc(c.step)}` : c.status === "done" ? `<i class="dot ok"></i>${c.duration}s${dims}${shots}` : c.status === "failed" ? `<i class="dot bad"></i>failed` : `<i class="dot warn"></i>prompt ready · not sent`;
+    const canCharRef = c.kind === "clip" && (S.video.models[c.vmodel] || {}).char_ref && S.character && S.character.file;
     el.innerHTML = `
       <div class="media">${c.file ? `<video src="/vid/${encodeURIComponent(c.file)}" ${src ? `poster="${frameSrc(src)}"` : ""} controls preload="metadata" loop muted></video>` : src ? `<img src="${frameSrc(src)}" alt="">` : ""}
         ${withStitchBox && c.status === "done" ? `<label class="inreel ${stitchSel.has(c.id) ? "on" : ""}" title="Include this clip in the reel. Order is the order you tick."><input type="checkbox" class="stitchsel" ${stitchSel.has(c.id) ? "checked" : ""}><span>${stitchSel.has(c.id) ? `<b class="ord">${[...stitchSel].indexOf(c.id) + 1}</b> In reel` : "Add to reel"}</span></label>` : ""}
         ${busyItem ? `<div class="working"><span><i class="dot live"></i>${esc(c.step)}<button class="btn quiet vcancel" type="button">Cancel</button></span></div>` : ""}</div>
       <div class="body">
         <div class="top"><label>${title}</label><span>${state}</span></div>
+        ${canCharRef ? `<label class="showall" style="float:none"><input type="checkbox" class="charref" ${c.char_ref ? "checked" : ""}${busyItem ? " disabled" : ""}> Reference character · start frame + character as second reference</label>` : ""}
         ${c.error ? `<div class="err">${esc(c.error)}</div>` : ""}
         ${c.kind === "reel" ? `<div class="hint" style="font-family:var(--em-font-mono);font-size:11px;color:var(--em-ink-dim)">${esc(c.prompt)}</div>` : `<textarea spellcheck="false" placeholder="Motion prompt appears here once written.">${esc(draft ?? c.prompt)}</textarea>`}
         <div class="actions"><span class="r">${c.file ? `<a class="btn quiet" href="/vid/${encodeURIComponent(c.file)}" target="_blank" rel="noopener">Open</a><a class="btn quiet" href="/vid/${encodeURIComponent(c.file)}" download="${esc(c.file)}">Download</a>` : ""}${!busyItem ? `<button class="btn quiet vremove" type="button" title="Remove from this list (keeps the file)">Remove</button>` : ""}</span>
@@ -481,6 +569,7 @@ function renderClipCards(list, wrap, els, withStitchBox){
       </div>`;
     const ta = el.querySelector("textarea"); if (ta) { const fit = () => { ta.style.height = "auto"; ta.style.height = Math.max(64, ta.scrollHeight + 2) + "px"; }; ta.addEventListener("input", fit); requestAnimationFrame(fit); }
     const cb = el.querySelector(".stitchsel"); if (cb) cb.addEventListener("change", () => { cb.checked ? stitchSel.add(c.id) : stitchSel.delete(c.id); el.dataset.sig = ""; renderVideo(); });
+    const cr = el.querySelector(".charref"); if (cr) cr.addEventListener("change", () => api("/api/video/char_ref", {id: c.id, on: cr.checked}));
     const vc = el.querySelector(".vcancel"); if (vc) vc.addEventListener("click", async () => { vc.disabled = true; await api("/api/video/cancel", {id: c.id}); poll(); });
     const rm = el.querySelector(".vremove"); if (rm) rm.addEventListener("click", async () => { await api("/api/video/remove", {id: c.id}); el.remove(); delete els[c.id]; stitchSel.delete(c.id); poll(); });
     const mk = el.querySelector(".vmake1"); if (mk) mk.addEventListener("click", async () => { await saveNow(); const r = await api("/api/video/make", {ids: [c.id], prompts: {[c.id]: el.querySelector("textarea").value}}); if (r.error) toast(r.error); poll(); });

@@ -1,6 +1,6 @@
 # Render Post — Behavior Map
 
-> Last verified against: v1.9.0
+> Last verified against: v1.12.2
 
 This is a map of how Render Post actually behaves: what happens when you click something, where
 that gets saved, and what logic decides the result. It is **not** a user guide (that's
@@ -29,6 +29,7 @@ touch.
    - [3.8 Model catalog & pricing](#38-model-catalog--pricing)
    - [3.9 Settings / config](#39-settings--config)
    - [3.10 Saved phrases](#310-saved-phrases)
+   - [3.11 Aggregator providers](#311-aggregator-providers)
 4. [AI / prompt-brief reference](#4-ai--prompt-brief-reference)
 5. [Demo mode approximations](#5-demo-mode-approximations)
 6. [View / interaction map](#6-view--interaction-map)
@@ -321,6 +322,309 @@ notes themselves. Reads/writes are serialized under `PHRASES_FILE_LOCK` the same
 saved-phrase popup re-renders immediately after an add or delete; inserting a phrase runs through
 the same `input`-event pipeline as typing, so it triggers the normal autosave and prompt-length
 recalculation.
+
+### 3.11 Aggregator providers
+
+**Scope, on purpose:** only the two production calls — `Fal.edit()` (image) and `Fal.video()`
+(video) — are ever routed to a third-party provider. Writing prompts, writing angle/motion
+prompts, generating the character reference portrait, and every upload/download of a *source*
+image always go through `self.fal` directly; nothing in this feature touches that path.
+
+**Choosing a provider is choosing a model.** `MODELS`/`VIDEO_MODELS` entries carry an optional
+`"provider"` key (default, if absent: `"fal"`, today's only behavior, unchanged). A model whose
+provider isn't connected simply doesn't appear in the `#model`/`#vmodel` dropdowns — there's no
+separate global "fal vs. aggregator" switch; picking a provider-backed entry from the model
+dropdown *is* the switch, exactly like picking GPT Image vs. Nano Banana today. Connected
+provider-backed models show a `· ProviderLabel` suffix in the dropdown.
+
+**Providers are declarative, not code.** `PROVIDERS` (empty by default — the app favors no
+aggregator) holds connector definitions. One generic engine, `AggregatorProvider`, reads any
+conforming definition and dispatches on its `transport` — adding a new aggregator (or fixing one
+whose API changed) never needs a rebuild. Providers arrive the same way extra models do: merged
+from the model catalog's `providers` section (same `catalog_url`, see §3.8), or pasted as a
+one-off "custom provider" in Connect providers, stored in `config.json`'s `custom_providers` and
+merged in regardless of whether the remote catalog fetch succeeds. Two transport shapes:
+
+- **`rest_async`/`rest_sync`** — plain HTTP, `base_url` + per-operation `submit`/`poll` templates,
+  matching the exact submit-then-poll shape `Fal.edit()`/`Fal.video()` already use against fal.ai.
+- **`mcp_http`** — a *remote* (not local/stdio) Streamable HTTP MCP server, `mcp_url` + a
+  per-operation `steps` list of MCP tool calls, each threading its extracted output into later
+  steps' arguments. This exists specifically because some aggregators bill their plain REST API
+  as a separate paid product from their subscription, while their MCP surface draws from the same
+  subscription credit pool as their own web app (confirmed for Higgsfield: `api.higgsfield.ai` is
+  pay-as-you-go regardless of subscription; `mcp.higgsfield.ai/mcp` shares the subscription's
+  credit pool) — `mcp_http` is the only transport here that can actually spend a subscription
+  instead of a separate balance. Needs the `mcp` pip package (`requirements.txt`, `--collect-all
+  mcp` in `build.bat`/the workflow), imported lazily inside `_mcp_run_steps()` so the app still
+  runs with no `mcp_http` provider connected and the package absent — same convention as `Fal`'s
+  lazy `import fal_client`.
+
+Both transports share the same `auth` block shape (`header_template` for a REST API-key style
+header, `bearer` for a pre-obtained static token, or `oauth2` for a one-time-consent flow — an
+`oauth2` provider works the same way under either transport, see Connecting below).
+
+**Connecting:** the "Connect providers" button (next to Change key) lists every known provider
+with its connection status. An API-key provider gets a small form (fields named by the provider's
+own `auth.fields`) POSTed to `/api/providers/connect`, saved into `config.json`'s `providers`
+dict (same location/never-in-the-render-folder rule as `fal_key`). An `oauth2` provider gets a
+single Connect button: `/api/providers/oauth/start` builds a PKCE authorize URL (no client secret
+is ever embedded — this app ships as a public/native client) and opens it in a new tab; the app's
+own local server handles the redirect at `/oauth/<id>/callback`, exchanges the code for tokens,
+and saves them the same way. Every actual generation call afterward is headless; a 401 during a
+call triggers one silent refresh-token exchange before failing for real.
+
+If the provider's `auth` block names a `registration_endpoint` instead of (or alongside) a fixed
+`client_id`, `/api/providers/oauth/start` performs Dynamic Client Registration (RFC 7591) first —
+POSTs to that endpoint, gets back a fresh `client_id`, uses it for that connect flow, and stashes
+it in the saved credentials so the later refresh-token exchange reuses the same one. This is
+registered fresh on every connect rather than cached long-term, because RenderPost's OAuth
+redirect_uri embeds its listen port (`free_port()`, different every launch) — a client registered
+against a stale port's redirect_uri would no longer match on a later connect attempt. Verified
+against Higgsfield's real Clerk-backed auth server (`clerk.higgsfield.ai`), which supports this —
+confirming self-service registration (no vendor contact needed) is how "various LLM instances"
+were able to connect to Higgsfield's MCP server just by pointing at its URL.
+
+**Dispatch:** `State.generator_for(model_entry)` resolves `self.fal` or a cached
+`AggregatorProvider`/`DemoAggregator` per the model's `provider` field, used at the three call
+sites (`_job`, `_angles_job`, `_clip_job`) in place of `self.fal.edit()`/`self.fal.video()`.
+Downloading the result also goes through whichever client produced it, since a provider's output
+may need its own auth header to fetch. Pricing reuses the exact `price`/`mult` shape
+`MODELS`/`VIDEO_MODELS` already use, so `image_cost()`/`video_cost()` need no special-casing —
+a provider-backed catalog entry just declares its own price like any fal one does.
+
+**Demo mode:** `DemoAggregator` mirrors `DemoFal`'s fakes (it delegates straight to a `DemoFal`
+instance) so a provider-backed model can be exercised in `--demo` mode without credentials. Demo
+mode also fakes the whole OAuth round-trip for a `oauth2` provider (`/api/providers/oauth/start`
+writes fake tokens directly and returns `{"demo": true}` instead of building a real authorize
+URL) so Connect/Disconnect and the dropdown-gating UI are fully testable without a real account —
+otherwise demo mode's own `connected` bypass previously made Disconnect a no-op (fixed).
+
+**Optional per-model template args:** a `MODELS`/`VIDEO_MODELS` entry can declare extra fields
+beyond the structural ones (label, price, provider, ...) — e.g. `"variant": "flare"` — which
+`_model_extra_args()` threads into that model's `edit()`/`video()` call as extra template
+placeholders. This is how two catalog entries can route through the *same* provider definition
+but select a different underlying variant (Higgsfield's built-in Flare/Sunburst pair does this),
+without the provider template hardcoding either one.
+
+**Optional/conditional template pieces:** a `steps` entry can carry `"when": "<arg>"` to skip that
+whole tool call when the arg is falsy (e.g. an optional character-reference import), and a list
+item (such as a `medias` entry) can carry `"_when": "<arg>"` to drop just that item instead of the
+whole step — both compose, so an aggregator provider's request only grows an extra reference image
+when one was actually passed to `edit()`. A dict key whose filled value is exactly Python `None` is
+dropped from its parent dict entirely (not sent as a literal null) — this is how one shared
+operation template serves several underlying models with different parameter schemas: a model's
+catalog entry either omits a template variable it doesn't need (reads back as `None`) or explicitly
+sets it to `None` to suppress a value a shared default would otherwise supply. `edit()`/`video()`
+spread `_model_extra` *after* their own cfg-derived defaults, so a catalog entry's explicit value —
+including `None` — wins over the live UI setting (needed when a control is hidden for that model,
+e.g. Resolution for a model with only one tier, but `cfg` still holds a stale value from whatever
+was last selected).
+
+**Built-in provider:** Higgsfield ships as a real `PROVIDERS` entry (not just documentation) — eight
+models paired or added against their fal equivalents, all `"recommended": true` so they sit next to
+the fal versions once connected: GPT Image 2.5 Flare/Sunburst, Nano Banana Pro, Nano Banana 2 and
+Seedance 2.5 in the image/video pickers, plus Kling 3.0, MiniMax H3 and Veo 3.1 as video-only
+additions with no fal equivalent shipped (a further five video models were tried and removed again
+after proving intermittent on Higgsfield's own backend — see git history on this branch if
+revisiting). `docs/provider-example-higgsfield.json` mirrors the original (image + video)
+definition; every field, including every model's parameter names, option values and per-unit
+pricing, was verified live against Higgsfield's own `models_explore` and cost-preflight tools rather
+than guessed from documentation. Artlist and Nim.video are meant to join the same way once their
+connection details are worked out; nothing about the engine favors Higgsfield specifically.
+
+**Character reference at clip-generation level (Seedance 2.5 and MiniMax H3 via Higgsfield only):**
+an explicit "Reference character" checkbox on the clip card itself — shown only when the clip's
+video model is one of `CHAR_REFERENCE_VIDEO_MODELS` (`seedance-higgsfield`, `minimax-h3-higgsfield`)
+and a character image is present (`S.character.file`). Deliberately independent of whether the
+picked frame's own version was generated with character reference on — an earlier version of this
+feature inferred presence from that version history, which Filip found too indirect and which broke
+for an image generated before that flag existed on it even though a character was present; a plain
+explicit checkbox replaced it. The checkbox's state lives on the clip object itself (`c["char_ref"]`,
+defaults `False`), toggled via `POST /api/video/char_ref` (`id`, `on`), independent of the clip's
+prompt/status so toggling it doesn't require rewriting the motion prompt. When on, `_clip_job`
+attaches the character image as a second reference alongside the start frame — start frame first
+(`role: "start_image"`), character second (`role: "image_references"`), the input shape Filip
+verified working directly in Higgsfield's own web UI (and separately via a direct MCP test on
+Seedance 2.5, which allows this combination). Implemented the same way the image operation already
+handles an optional character reference: a second `media_import_url` step gated by `"when":
+"character_url"`, and a second `medias` entry gated by `"_when": "character_media_id"` — both
+silently no-op when the checkbox is off, or for any other video model, since only `_clip_job`
+decides whether to pass `extra_urls` at all (the shared Higgsfield video template never branches on
+which model is selected). Take mode is unaffected — it already attaches the character image its own
+way, via `cfg["take_character"]`, appended directly into the source `image_urls` list rather than as
+a separate reference parameter.
+
+**MiniMax H3 is the exception to "start frame first, character second"**: its real API rejects
+`start_image`/`end_image` combined with any reference media at all (`422`: "start_image/end_image
+cannot be mixed with reference media" — found live, not documented anywhere, fixed same day).
+Confirmed via direct MCP testing that the fix is to drop `start_image` entirely when a character
+reference is active and send *both* images as `image_references` instead (frame first, character
+second — order alone carries the "this one is the start frame" meaning for this model, there's no
+separate start_image role once reference mode is in play). This is model-specific, not a `_clip_job`
+decision: `AggregatorProvider.video()` computes the first media's role as `"{frame_role}"` — a new
+template placeholder, `"start_image"` by default, switched to `"image_references"` only when a
+character reference is active *and* the model's catalog entry declares `"char_ref_exclusive":
+True` (currently only `minimax-h3-higgsfield`). Seedance 2.5 keeps the default (`start_image` +
+`image_references` together) since its API accepts that combination — confirmed both in the
+original pig/fox MCP test and again while diagnosing this.
+
+**GPT Image 2.5 via Higgsfield's Quality selector:** the UI's Quality/Output-size/Resolution
+controls used two CSS classes gating two mutually exclusive `"kind"` values (`gpt`: Quality + Output
+size; `nano`: Resolution only) — no combination existed. GPT Image 2.5 via Higgsfield needs Quality
+*and* Resolution together (it has both parameters, unlike Output-size-in-pixels which is fal-only),
+so Quality and Output size were split into their own classes (`qual`, `size`; Resolution keeps
+`nano`) and a third kind, `gptres`, shows Quality + Resolution while hiding Output size. Its spend
+estimate now reads a verified quality-by-resolution price table (`price_table`, shaped like the
+existing fal-side `GPT_IMAGE_EST`) instead of a flat per-resolution rate, since real cost varies by
+both — confirmed live (e.g. low/1K ≈ $0.008 vs max/4K ≈ $0.50 per image). Nano Banana Pro/2 via
+Higgsfield have no quality parameter at all, so their catalog entries explicitly suppress it
+(`"quality": None`) rather than silently forwarding whatever the (hidden, for their `nano` kind)
+Quality control last held.
+
+**A real, separate bug this surfaced:** `save_config()`'s user-level `config.json` write has no
+locking and blindly overwrites the whole file with whatever (possibly stale) snapshot the calling
+request started from — the same class of problem §7's character-checkbox race was, but in
+`config.json` itself rather than `renderpost.json`, and pre-existing (not introduced by this
+feature). It surfaced here because Connect/Disconnect are now interactive enough to race against
+the page's own frequent `/api/config` autosave. Fixed narrowly for the fields this feature owns:
+`update_providers_config()` locks, re-reads `config.json` fresh from disk, and lets a small
+mutator function change just `providers`/`custom_providers` before writing back — verified under
+real concurrent stress (multiple threads hammering unrelated saves against a thread toggling
+connect/disconnect). The wider pre-existing pattern (every other setting in `config.json`) still
+has the same theoretical race and isn't fixed by this change.
+
+**Second built-in provider, Nim.video — same engine, three real differences from Higgsfield, each
+confirmed live rather than assumed from Higgsfield's shape:**
+
+1. **No import-by-URL.** Higgsfield's `media_import_url` takes a bare remote URL; Nim has no
+   equivalent tool at all — a bare URL placed directly in `fileInputs` fails with
+   `generation_unavailable` (confirmed live). Nim's real mechanism is two-phase: `media_upload`
+   (no arguments) mints a short-lived upload slot (`upload_url`, a ~10-minute JWT in the query
+   string), then the actual file bytes go up as a plain `multipart/form-data` POST to that URL —
+   not a second MCP tool call. This needed a genuinely new step primitive, `"upload_from":
+   "<template>"` on a step (handled by `_mcp_upload_step()`, dispatched from `_mcp_run_steps()`'s
+   step loop alongside the existing plain-call and `poll` branches): it runs the mint call, then
+   fetches the bytes from wherever `upload_from` resolves to (normally `{image_url}`, the
+   fal-hosted source) and POSTs them itself. Nim also enforces a minimum 300×300px upload size
+   (confirmed via a real rejection on a 100×100 test image) — not handled specially, since every
+   real render folder image is already far larger.
+2. **Flat reference arrays, not role-tagged objects.** Higgsfield's `medias` is `[{value, role},
+   ...]`; Nim's `fileInputs` is `[url, url, ...]` — plain strings, no role tag (a reference image
+   vs. a start frame isn't distinguished at this level for Nim's Basic/Consistency models). The
+   existing `"_when"` conditional-drop mechanism only worked on dict-shaped list items, so
+   `_fill_template()` gained a second wrapper form, `{"_scalar": "<template>", "_when": "<arg>"}`
+   — filled and returned as the bare value instead of a dict (still honoring `"_when"`), letting a
+   flat array conditionally include a second plain-string reference the same way Higgsfield's
+   `medias` conditionally includes a second tagged one.
+3. **A multi-valued terminal status, not one done flag.** Higgsfield's `jobs_wait` exposes a single
+   `all_terminal` boolean; Nim's `get_generation_status` instead reaches one of four terminal
+   *strings* (`finished`/`failed`/`cancelled`/`removed`) in its own `status` field — confirmed live
+   by watching real generations complete. The poll loop's `"poll_done_value"` can now be a list as
+   well as a scalar (membership check instead of equality) so a Nim poll step's
+   `"poll_done_value": ["finished", "failed", "cancelled", "removed"]` stops polling on any of the
+   four instead of hanging to `poll_max_attempts` on a failure.
+
+Also confirmed live and worth recording since they're easy to get wrong by analogy with
+Higgsfield: Nim's OAuth app (`mcp.nim.video`) supports the same Dynamic Client Registration flow
+Higgsfield's does (direct unauthenticated HTTP test against `/api/mcp/oauth/register`), but its
+discovery metadata and DCR response both report `grant_types: ["authorization_code"]` only — no
+`refresh_token` grant, unlike Higgsfield — so its `PROVIDERS` entry declares `"fields":
+["access_token"]` only; `_refresh_oauth()` already no-ops correctly for any provider with no stored
+`refresh_token`, so this needed no code change, just the right catalog data. One Nim model family
+was found genuinely broken during this work (`gptConsistencyLow`/`High`, the plain, non-"runware"-
+prefixed GPT Image Editing models — failed with `generation_unavailable` even with a confirmed-good
+upload, while an `isChatRecommended` model with an identical request shape succeeded immediately
+right after) — not used in the catalog; the `runwareOpenaiGptImage25Flare/Sunburst...` family works
+and is what's shipped. Dollar price estimates for Nim models use $0.003125/credit (Nim's published
+Pro plan, $12.50/mo for 4000 credits — confirmed to match this account's own credit-balance cap, not
+a number Nim exposes directly through its MCP tools), the same "verify against your own plan tier"
+caveat Higgsfield's estimates already carry.
+
+**Second pass, same branch, later: a real download bug, a real dispatch non-bug, and five more Nim
+models with two more new engine mechanisms — again each difference confirmed live.**
+
+**The real bug, found live running a non-demo instance against Filip's own Nim account**: enhancing
+through `gpt-image-2.5-flare-nim` reported "fal refused this request (403)" even though Nim's own
+web UI showed the generation had actually succeeded. The message is misleading twice over — it's
+not from fal, and it's not a 403 on the generation itself. `friendly()`'s `"403" in m` check is a
+plain substring match with no source check, and the real 403 was on the *download* step, from a
+plain `urllib.request.urlopen()` with no headers at all against Nim's static CDN — reproduced
+directly (`HTTPError 403`) and fixed by adding the same `User-Agent` header every other outbound
+call in `AggregatorProvider` already sends (`download()` was the one method that didn't). Higgsfield
+never hit this because whatever serves its own result URLs doesn't filter on User-Agent; Nim's does.
+Confirmed fixed with two real generations immediately after (`gpt-image-2.5-flare-nim` at Medium,
+then Low, to also prove the quality switch below is real and not silently landing on Medium every
+time — the Low run billed 5 credits vs Medium's 8, confirming it).
+
+**The reported non-bug**: a video generation selected as "Hailuo 2.3 Fast · Nim" instead ran as
+"MiniMax H3 · Higgsfield." Not a dispatch bug — the clip card being resubmitted was an old draft
+from earlier testing, still carrying `vmodel: "minimax-h3-higgsfield"` from when it was created;
+clip cards are deliberately sticky to whatever model they had when drafted (see the diagnosed, not
+a bug note above), and nothing re-reads the global model selector on a plain "Make clip" resubmit
+of an existing ready/failed draft. Confirmed by inspecting the folder's own `clips.json`: every
+existing draft had the stale Higgsfield `vmodel`. The fix, in this case, is to re-run "Write
+prompts" with the new model selected (which does refresh a reused draft's `vmodel`, see
+`_clip_cfg_fields()`) rather than clicking "Make clip" on an old card.
+
+**Two more engine mechanisms, both in `AggregatorProvider`, both generic (not Nim-specific) even
+though Nim is what needed them first:**
+
+- **`"quality_model_ids"` / `"quality_model_names"`** (`edit()`) and **`"res_model_ids"` /
+  `"res_model_names"`** (`video()`) — for a provider whose quality or resolution tiers are each a
+  *separate model id* rather than one adjustable request parameter. Verified live on three real
+  model families: Nim's GPT Image 2.5 Flare/Sunburst (Low/Medium/High are three distinct
+  `model_id`s — confirmed by the differing real credit charge above) and Kling 3.0 (Standard/Pro are
+  two distinct `model_id`s, confirmed via Kling 3's own `generationContract`, which forbids a
+  `resolution` argument outright on both — there's no runtime parameter to switch, only the model
+  itself). The catalog's own `"quality_opts"` dict (new, parallel to video's existing `"durations"`)
+  restricts the *Quality* dropdown itself to a model's real tiers, the same way `"res"` already
+  restricts the *Resolution* dropdown — needed because Nim's GPT family only has 3 tiers where fal's
+  own has 5 (no Extra high/Max), and showing all 5 with 2 silently collapsing onto "High" would be a
+  real, hard-to-notice correctness bug, not a convenience.
+- **`"res_case": "upper"`** (`video()`) — for a provider whose resolution string is the same value
+  as this UI's own lowercase dropdown, just differently cased. Verified live: Nim's MiniMax H3 Max
+  wants exact-case `"480P"`/`"768P"`; this UI's Resolution dropdown is `"480p"`/`"768p"` everywhere
+  else. A real 480p/5s generation through `minimax-h3-nim` billed exactly 50 credits (10 credits/sec
+  × 5s, the live-verified rate) — confirming both the transform and the price in one run.
+
+**Five more Nim models, all parameters verified live via Nim's own model catalog (never guessed),
+most via its free cost-preflight (`models_explore get` with an explicit `resolution`/`duration`
+argument returns a real adjusted price with no generation and no charge — used to verify per-tier
+pricing for Seedance 2.5, MiniMax H3 Max and Veo 3.1 without spending credits on every tier):**
+`nano-banana-2-nim` (run for real, 20 credits, matches its published rate exactly), `gpt-image-2.5-
+sunburst-nim` (same verified family as Flare, not separately re-run), `kling-3-0-nim` (Standard/Pro
+model-id switch verified via its own `generationContract`; not run for real — 45–60 credits/second
+made even a minimal clip the most expensive single verification this branch would have made, out of
+proportion to what a schema check already confirms), `minimax-h3-nim` (run for real, confirmed
+above), `veo-3-1-nim` (fixed to the Fast, no-generated-audio tier — Nim's Standard tier and both
+sound variants are real but notably pricier and not exposed yet; its flat per-resolution rate was
+confirmed via the free preflight, not run for real). `seedance-2-5-nim` also gained its full
+480p/720p/1080p resolution range this pass (previously fixed to 720p only, pending exactly this free
+per-tier price check) — still not run through an actual generation itself, same reason as Kling.
+
+**Third pass, same branch, same day: a real aspect-ratio bug in every Nim image model, found live
+by Filip testing GPT Image 2.5 Flare on a 2:3 render.** Output came back 16:9 regardless of the
+source's own aspect — Nim defaults to a flat 16:9 whenever `requestedAspectRatio` is simply omitted,
+which every Nim image model's template did (the field was never sent at all before this fix; see
+§3.11's second subsection above, which only ever covered `resolution`/`requestedAspectRatio` as
+things a *video* model might forbid, never that an *image* model's own aspect ratio needed sending
+at all). Higgsfield and fal were never affected — this is Nim-specific, found by testing the real
+thing, not inferred from either of their own behavior. Two real shapes, both verified live against
+Nim's own model catalog: Nano Banana Pro Edit/2 accept a literal `"auto"` value and preserve the
+input's own aspect directly, no computation needed; GPT Image 2.5 Flare/Sunburst have no `"auto"`
+option at all and need a real value from their own 9-item enum (`16:9`/`9:16`/`1:1`/`4:3`/`3:4`/
+`3:2`/`5:4`/`4:5`/`2:3`). A new helper, `_nearest_ratio(w, h, allowed)`, picks whichever of a
+model's allowed ratios is numerically closest to the source image's real `w/h` when the exact
+computed fraction (already available as `edit()`'s own `"aspect_ratio"` arg, reduced via `gcd`)
+isn't itself one of the allowed values — Filip's own 2:3 render happened to be an exact match (`2:3`
+is in GPT's enum), so his case needed no snapping at all, just sending the field in the first place.
+Each Nim image catalog entry now declares `"nim_aspect_ratios"`: either the literal string `"auto"`
+or that model's own allowed list; `AggregatorProvider.edit()` reads it and sets a new `"aspect_ratio_
+nim"` template variable accordingly, referenced by `requestedAspectRatio` in the provider's image
+template. Confirmed correct via the real template-fill pipeline for an exact match, a snapped match,
+and `"auto"` — not yet re-confirmed with another live generation after Filip's original report (the
+mechanism was verified end to end through the same code path his real generation used, just not
+re-run against the live API a second time before this session ended).
 
 ## 4. AI / prompt-brief reference
 

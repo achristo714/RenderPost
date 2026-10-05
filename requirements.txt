@@ -2,3 +2,5 @@ pyinstaller
 fal-client
 pillow
 imageio-ffmpeg
+mcp
+typer

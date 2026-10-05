@@ -13,7 +13,7 @@ Demo mode (no API calls, fakes the enhancement so you can test the UI):
 
 Build the single .exe (once, on Windows, or via the GitHub Actions workflow):
     pip install -r requirements.txt
-    python -m PyInstaller --onefile --noconsole --name RenderPost --collect-all fal_client --collect-all httpx --collect-all imageio_ffmpeg --add-data "web;web" --icon RenderPost.ico RenderPost.py
+    python -m PyInstaller --onefile --noconsole --name RenderPost --collect-all fal_client --collect-all httpx --collect-all imageio_ffmpeg --collect-all mcp --add-data "web;web" --icon RenderPost.ico RenderPost.py
     -> dist\\RenderPost.exe   (no Python, no command window; log in %APPDATA%\\RenderPost\\log.txt)
 """
 
@@ -21,13 +21,21 @@ import io
 import os
 import sys
 import json
+import math
+import re
 import time
 import uuid
+import asyncio
+import base64
+import hashlib
+import secrets
 import shutil
 import socket
 import threading
+import traceback
 import webbrowser
 import urllib.parse
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor
@@ -40,12 +48,34 @@ from prompts import (
 )
 
 APP_NAME = "RenderPost"
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.12.2"
 # Optional: where the exe checks for a newer release. Point this at your GitHub repo's
 # latest-release API and the header shows an "Update available" link when a newer tag exists.
 # e.g. "https://api.github.com/repos/YOURNAME/renderpost/releases/latest"   ("" = don't check)
 UPDATE_URL = "https://api.github.com/repos/achristo714/RenderPost/releases/latest"
 DEMO = "--demo" in sys.argv
+
+# GPT Image 2.5 via Higgsfield: verified per-image cost in credits (models_explore get_cost, Sep 2026),
+# converted at ~$0.033/credit on the Ultimate plan — verify at your own plan tier. Flare and Sunburst cost the same.
+GPT_IMAGE_HIGGSFIELD_EST = {
+    "low":    {"1K": 0.0083, "2K": 0.0165, "4K": 0.0248},
+    "medium": {"1K": 0.0165, "2K": 0.0330, "4K": 0.0413},
+    "high":   {"1K": 0.0495, "2K": 0.0908, "4K": 0.1403},
+    "xhigh":  {"1K": 0.0825, "2K": 0.1485, "4K": 0.2310},
+    "max":    {"1K": 0.1650, "2K": 0.2970, "4K": 0.4950},
+}
+# GPT Image 2.5 via Nim.video: each quality tier is its own model id on Nim (unlike fal/Higgsfield's
+# single adjustable "quality" param) — only Low/Medium/High exist, verified via Nim's own model
+# catalog (runwareOpenaiGptImage25Flare/SunburstConsistency{Low,Medium,High}). Credits verified live
+# (Low 3cr, Medium 6-8cr — Nim adds ~2cr/megapixel of reference images on top of the base rate, High
+# 22cr) at $0.003125/credit (Nim's published Pro plan, $12.50/mo for 4000 credits — matches this
+# account's own balance cap). Same number across every resolution column: Nim's own model catalog
+# doesn't expose a per-resolution breakdown for this family the way it does for video models.
+GPT_IMAGE_NIM_EST = {
+    "low":    {"1K": 0.0094, "2K": 0.0094, "4K": 0.0094},
+    "medium": {"1K": 0.025,  "2K": 0.025,  "4K": 0.025},
+    "high":   {"1K": 0.0688, "2K": 0.0688, "4K": 0.0688},
+}
 
 MODELS = {
     "gpt-image-2.5-flare":    {"label": "GPT Image 2.5 Flare · OpenAI", "endpoint": "openai/gpt-image-2.5/flare/edit", "kind": "gpt", "recommended": True,
@@ -58,6 +88,60 @@ MODELS = {
     "nano-banana-2":   {"label": "Nano Banana 2 · Google, fast", "endpoint": "fal-ai/nano-banana-2/edit", "kind": "nano", "recommended": True,
                         "price": 0.08, "mult": {"1K": 1, "2K": 1.5, "4K": 2},
                         "hint": "fastest and cheapest, good for quick passes · $0.08 per image, 2K x1.5, 4K x2"},
+    "gpt-image-2.5-flare-higgsfield":    {"label": "GPT Image 2.5 Flare · OpenAI", "kind": "gptres", "provider": "higgsfield", "recommended": True,
+                        "higgsfield_model": "gpt_image_2_5", "variant": "flare", "price_table": GPT_IMAGE_HIGGSFIELD_EST,
+                        "hint": "same OpenAI model as the fal Flare entry · quality and resolution both selectable · runs on your Higgsfield subscription credits instead of a separate fal balance · about $0.008 to $0.50 per image by quality and resolution · connect Higgsfield first"},
+    "gpt-image-2.5-sunburst-higgsfield": {"label": "GPT Image 2.5 Sunburst · OpenAI", "kind": "gptres", "provider": "higgsfield", "recommended": True,
+                        "higgsfield_model": "gpt_image_2_5", "variant": "sunburst", "price_table": GPT_IMAGE_HIGGSFIELD_EST,
+                        "hint": "same OpenAI model as the fal Sunburst entry · quality and resolution both selectable · runs on your Higgsfield subscription credits instead of a separate fal balance · about $0.008 to $0.50 per image by quality and resolution · connect Higgsfield first"},
+    "nano-banana-pro-higgsfield": {"label": "Nano Banana Pro · Google", "kind": "nano", "provider": "higgsfield", "recommended": True,
+                        "higgsfield_model": "nano_banana_pro", "quality": None, "price": 0.066, "mult": {"1K": 1, "2K": 1, "4K": 2},
+                        "hint": "same Google model as the fal Nano Banana Pro entry · deeper reasoning, strong text and diagrams · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first"},
+    "nano-banana-2-higgsfield":   {"label": "Nano Banana 2 · Google, fast", "kind": "nano", "provider": "higgsfield", "recommended": True,
+                        "higgsfield_model": "nano_banana_2", "quality": None, "price": 0.0495, "mult": {"1K": 1, "2K": 1.333, "4K": 2},
+                        "hint": "same Google model as the fal Nano Banana 2 entry · fastest and cheapest of the pair · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first"},
+    # Nim.video dollar estimates below: its own credit balance has no public $/credit rate exposed
+    # through the MCP tools (can't preview a credit-pack purchase headlessly either), so the figure
+    # used is $12.50/month for 4000 credits (Nim's own published Pro plan, confirmed live to match
+    # this account's own subscriptionCredits.max of 4000) = $0.003125/credit — verify against your
+    # own plan tier before trusting the dollar figure; the credit count itself is exact.
+    # "nim_aspect_ratios": "auto" — verified live that both Nano Banana Edit models accept this and
+    # preserve the source image's own aspect ratio directly; omitting the field entirely (as every
+    # Nim image model did before this fix) makes Nim default to a flat 16:9 regardless of input.
+    "nano-banana-pro-edit-nim": {"label": "Nano Banana Pro Edit · Google", "kind": "nano", "provider": "nim", "recommended": True,
+                        "nim_model": "3c1b1c5b-c1d6-44a8-b986-3068820f4927", "nim_model_name": "Nano Banana Pro Edit",
+                        "quality": None, "nim_aspect_ratios": "auto", "price": 0.078, "mult": {"1K": 1, "2K": 1, "4K": 1},
+                        "hint": "same Google model Higgsfield also offers · best at preserving identity/character detail across edits · output aspect ratio matches the input automatically · verified live, 25 credits at 2K (about $0.08 on a $12.50/mo Nim Pro plan) · connect Nim.video first"},
+    "nano-banana-2-nim": {"label": "Nano Banana 2 Edit · Google, fast", "kind": "nano", "provider": "nim", "recommended": True,
+                        "nim_model": "6a648ab7-a339-40f1-a8b3-586f15512968", "nim_model_name": "Nano Banana 2 Edit",
+                        "quality": None, "nim_aspect_ratios": "auto", "price": 0.0625, "mult": {"1K": 1, "2K": 1, "4K": 1},
+                        "hint": "same Google model Higgsfield also offers · faster, cheaper sibling of Nano Banana Pro Edit · output aspect ratio matches the input automatically · verified live, 20 credits at 2K (about $0.06 on a $12.50/mo Nim Pro plan) · connect Nim.video first"},
+    # GPT Image 2.5 Flare/Sunburst · Nim: unlike fal/Higgsfield's single adjustable "quality" param,
+    # Nim bills each quality tier as its OWN model id (verified via Nim's own model catalog) — the
+    # Quality dropdown has to pick a different model, not just a different request field. That's
+    # what "quality_model_ids"/"quality_model_names" are for (consumed by AggregatorProvider.edit());
+    # "quality_opts" restricts the dropdown itself to exactly these three real tiers (Nim has no
+    # Extra-high/Max tier the way fal does). Low/Medium/High ids verified live via models_explore;
+    # Medium's edit() was also run through a real generation end to end.
+    # "nim_aspect_ratios": a real list, not "auto" — verified live that GPT Image 2.5 Flare/Sunburst
+    # have no "auto" option and default to a flat 16:9 when requestedAspectRatio is omitted; the
+    # exact computed aspect ratio is used when it's one of these, else the nearest (_nearest_ratio).
+    "gpt-image-2.5-flare-nim": {"label": "GPT Image 2.5 Flare · OpenAI", "kind": "nano", "provider": "nim", "recommended": True,
+                        "nim_model": "01f73222-3ce4-4470-9352-afa375155d1a", "nim_model_name": "GPT Image 2.5 Flare",
+                        "quality": None, "quality_opts": {"low": "Low", "medium": "Medium", "high": "High"},
+                        "quality_model_ids": {"low": "ca70670d-8ee5-4e96-83c0-ee8546fc56ff", "medium": "01f73222-3ce4-4470-9352-afa375155d1a", "high": "ce71657f-3e7c-4243-879e-1c90eb4c6840"},
+                        "quality_model_names": {"low": "GPT Image 2.5 Flare", "medium": "GPT Image 2.5 Flare", "high": "GPT Image 2.5 Flare"},
+                        "nim_aspect_ratios": ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "5:4", "4:5", "2:3"],
+                        "price_table": GPT_IMAGE_NIM_EST, "mult": {"1K": 1, "2K": 1, "4K": 1},
+                        "hint": "same OpenAI model as the fal/Higgsfield Flare entries · Nim bills each quality tier as a separate model, so only Low/Medium/High exist here (no Extra high/Max) · output aspect ratio matches the input when it's one of Nim's nine supported ratios, else the closest one · verified live (Medium and Low both run through real generations; the High id is confirmed via Nim's own catalog, not yet run) · Nim adds a small surcharge per megapixel of reference images on top of the base rate, so the real charge varies a little by image size · connect Nim.video first"},
+    "gpt-image-2.5-sunburst-nim": {"label": "GPT Image 2.5 Sunburst · OpenAI", "kind": "nano", "provider": "nim", "recommended": True,
+                        "nim_model": "1f71957b-194c-45ad-a575-82f46c12223c", "nim_model_name": "GPT Image 2.5 Sunburst",
+                        "quality": None, "quality_opts": {"low": "Low", "medium": "Medium", "high": "High"},
+                        "quality_model_ids": {"low": "2e448cf2-cbda-455e-8cae-36d0aa23ef36", "medium": "1f71957b-194c-45ad-a575-82f46c12223c", "high": "286c0a42-cd0d-4e5d-b2a8-e1f2b76a948c"},
+                        "quality_model_names": {"low": "GPT Image 2.5 Sunburst", "medium": "GPT Image 2.5 Sunburst", "high": "GPT Image 2.5 Sunburst"},
+                        "nim_aspect_ratios": ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "5:4", "4:5", "2:3"],
+                        "price_table": GPT_IMAGE_NIM_EST, "mult": {"1K": 1, "2K": 1, "4K": 1},
+                        "hint": "same OpenAI model as the fal/Higgsfield Sunburst entries · Nim bills each quality tier as a separate model, so only Low/Medium/High exist here (no Extra high/Max) · output aspect ratio matches the input when it's one of Nim's nine supported ratios, else the closest one · parameters and ids verified via Nim's own model catalog (same family as Flare, not individually re-run — see Flare's own note) · connect Nim.video first"},
 }
 RES_OPTIONS = {"1K": "1K (about 1024px)", "2K": "2K (about 2048px)", "4K": "4K (about 4096px)"}
 
@@ -79,11 +163,224 @@ VIDEO_MODELS = {
                  "hint": "strong motion and the only model for single takes · strict filter: refuses frames with realistic people",
                  "res": {"480p": "480p · iterate here", "720p": "720p · final"},
                  "price": {"480p": 0.2205, "720p": 0.4730}},        # per second, fal Aug 2026
+    "seedance-higgsfield": {"label": "Seedance 2.5 · ByteDance", "provider": "higgsfield", "recommended": True,
+                 "higgsfield_model": "seedance_2_5", "mode": "omni_reference", "generate_audio": False,
+                 "hint": "same ByteDance model as the fal entry · runs on your Higgsfield subscription credits instead of a separate fal balance · adds 1080p · connect Higgsfield first",
+                 "res": {"480p": "480p · iterate here", "720p": "720p", "1080p": "1080p · final"}, "min_duration": 4,
+                 "price": {"480p": 0.10, "720p": 0.23, "1080p": 0.40}},   # per second, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
+    "kling3-higgsfield": {"label": "Kling 3.0 · Kuaishou", "provider": "higgsfield", "recommended": True,
+                 "higgsfield_model": "kling3_0", "sound": "off", "res_param": "mode",
+                 "hint": "native audio disabled for predictable pricing · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
+                 "res": {"std": "Standard · iterate here", "pro": "Pro · recommended", "4k": "4K · final"}, "min_duration": 4,
+                 "price": {"std": 0.04125, "pro": 0.0495, "4k": 0.198}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
+    "minimax-h3-higgsfield": {"label": "MiniMax H3 · MiniMax", "provider": "higgsfield", "recommended": True,
+                 "higgsfield_model": "minimax_h3", "resolution": "2K", "char_ref_exclusive": True,
+                 "hint": "multimodal keyframe/reference video at a fixed 2K, the only resolution this model offers — no selector shown because there's nothing to choose · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
+                 "res": None, "min_duration": 4,
+                 "price": {"flat": 0.066}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
+    "veo3-1-higgsfield": {"label": "Veo 3.1 · Google", "provider": "higgsfield", "recommended": True,
+                 "higgsfield_model": "veo3_1", "res_param": "quality",
+                 "hint": "ultra-realistic cinematic quality · only 4s, 6s or 8s clips · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first",
+                 "res": {"basic": "Basic · iterate here", "high": "High", "ultra": "Ultra · final"},
+                 "durations": {"4": "4 s", "6": "6 s", "8": "8 s"}, "min_duration": 4,
+                 "price": {"basic": 0.132, "high": 0.132, "ultra": 0.297}},   # per second, verified via models_explore get_cost, at ~$0.033/credit on the Ultimate plan — verify at your own plan tier
+    # Nim.video dollar estimates: see the note above MODELS' Nim entries — $0.003125/credit, a Nim
+    # Pro-plan ($12.50/mo, 4000 credits) figure confirmed to match this account's own credit balance,
+    # not Nim's own stated number (it doesn't publish one through the MCP tools).
+    "hailuo-2-3-fast-nim": {"label": "Hailuo 2.3 Fast · MiniMax", "provider": "nim", "recommended": True,
+                 "nim_model": "a321628d-c026-4ac4-bf6c-326f62fb2e3c", "nim_model_name": "Hailuo 2.3 Fast",
+                 "resolution": None,   # forbidden param for this model at the API level — verified live
+                 "hint": "single reference frame, no resolution control (one fixed tier) · fixed to 6s for now — Nim also allows 10s but its credit cost wasn't confirmed · verified live, 30 credits for 6s (about $0.09 on a $12.50/mo Nim Pro plan) · connect Nim.video first",
+                 "res": None, "min_duration": 6, "durations": {"6": "6 s"},
+                 "price": {"flat": 0.094}},
+    "seedance-2-5-nim": {"label": "Seedance 2.5 · ByteDance", "provider": "nim", "recommended": True,
+                 "nim_model": "dc224f67-6752-4eaf-aa7d-10f20b810bb0", "nim_model_name": "Seedance 2.5",
+                 "hint": "same ByteDance model Higgsfield also offers · real per-resolution rates confirmed live via Nim's free cost-preflight (no generation needed to check a price) · parameters verified against Nim's own live model catalog — not yet run through an actual paid generation itself (its cost even at the minimum duration was higher than this session's remaining verification budget allowed), so try one short clip yourself first · connect Nim.video first",
+                 "res": {"480p": "480p · iterate here", "720p": "720p", "1080p": "1080p · final"}, "min_duration": 4,
+                 "price": {"480p": 0.071875, "720p": 0.15625, "1080p": 0.328125}},   # per second, verified live via models_explore's free cost preflight (resolution param), at $0.003125/credit
+    # Kling 3.0 · Nim: Standard and Pro are each their OWN model id on Nim (verified live: both
+    # forbid a runtime "resolution" parameter outright) — no 4K tier the way Higgsfield's Kling
+    # offers. "res_model_ids" switches the model id itself, keyed by the Resolution dropdown.
+    "kling-3-0-nim": {"label": "Kling 3.0 · Kuaishou", "provider": "nim", "recommended": True,
+                 "nim_model": "a278a676-48eb-4035-b9b0-2015d2fe66de", "nim_model_name": "Kling 3 Standard + Sound",
+                 "resolution": None,   # forbidden param at the API level for both tiers — verified live
+                 "res_model_ids": {"standard": "a278a676-48eb-4035-b9b0-2015d2fe66de", "pro": "92fe3361-dcfb-4116-ba55-ce7cdfe03f42"},
+                 "res_model_names": {"standard": "Kling 3 Standard + Sound", "pro": "Kling 3 Pro + Sound"},
+                 "hint": "native audio always on (Nim doesn't offer a silent Kling 3 variant) · no 4K tier the way Higgsfield's Kling 3.0 has · parameters and per-tier pricing verified via Nim's own model catalog, not yet run through an actual generation · connect Nim.video first",
+                 "res": {"standard": "Standard · iterate here", "pro": "Pro · final"}, "min_duration": 3,
+                 "price": {"standard": 0.140625, "pro": 0.1875}},   # per second, verified via Nim's own model catalog, at $0.003125/credit
+    # MiniMax H3 · Nim: unlike Higgsfield's version (fixed 2K, nothing to choose), Nim's MiniMax H3
+    # Max genuinely offers two resolutions. Its API wants exact-case "480P"/"768P" — "res_case":
+    # "upper" transforms this UI's lowercase dropdown value rather than needing separate option keys.
+    "minimax-h3-nim": {"label": "MiniMax H3 Max · MiniMax", "provider": "nim", "recommended": True,
+                 "nim_model": "383fc57a-c289-42ec-a8ca-dd4b5c348c72", "nim_model_name": "MiniMax H3 Max",
+                 "res_case": "upper",
+                 "hint": "real resolution choice, unlike Higgsfield's fixed-2K MiniMax H3 · up to 9 reference images at the API level (character-reference checkbox not wired to this model yet) · parameters and per-resolution pricing verified live via Nim's free cost preflight, not yet run through an actual generation · connect Nim.video first",
+                 "res": {"480p": "480p · iterate here", "768p": "768p · final"}, "min_duration": 5,
+                 "price": {"480p": 0.03125, "768p": 0.05}},   # per second, verified live via models_explore's free cost preflight, at $0.003125/credit
+    # Veo 3.1 · Nim: the "Fast, without audio" tier — Nim also offers a Standard tier and sound
+    # variants of both (confirmed via its own catalog), each priced noticeably higher; fixed to
+    # Fast/silent for now since there's no separate UI control here for that axis yet. Resolution
+    # IS a real runtime parameter on this one model (unlike Kling 3.0's model-per-tier split above),
+    # and its rate was confirmed flat across both tiers via Nim's free cost preflight.
+    "veo-3-1-nim": {"label": "Veo 3.1 · Google", "provider": "nim", "recommended": True,
+                 "nim_model": "d3c538f2-b174-4fb3-871c-893951117302", "nim_model_name": "Veo 3.1 Fast",
+                 "hint": "Fast tier, no generated audio — Nim also has a Standard tier and sound variants, both pricier; fixed to Fast/silent for now · only 8s clips at the API level · per-resolution rate confirmed flat live via Nim's free cost preflight, not yet run through an actual generation · connect Nim.video first",
+                 "res": {"720p": "720p · iterate here", "1080p": "1080p · final"},
+                 "durations": {"8": "8 s"}, "min_duration": 8,
+                 "price": {"720p": 0.046875, "1080p": 0.046875}},
 }
+# These two Higgsfield video models accept a character image as a second reference alongside the
+# start frame (verified working in Higgsfield's own web UI); others ignore it. Clip-generation only
+# (not takes, which already have their own character attachment via cfg["take_character"]).
+CHAR_REFERENCE_VIDEO_MODELS = ("seedance-higgsfield", "minimax-h3-higgsfield")
 VIDEO_RES = {"480p": "480p · iterate here", "720p": "720p · final"}   # take mode (Seedance)
 # Optional: a JSON at this URL can add or update models without rebuilding the exe.
-# Shape: {"image": {<key>: {...same fields as MODELS...}}, "video": {<key>: {...same fields as VIDEO_MODELS...}}}
+# Shape: {"image": {<key>: {...same fields as MODELS...}}, "video": {<key>: {...same fields as VIDEO_MODELS...}},
+#         "providers": {<id>: {...see PROVIDERS below...}}}
 MODEL_CATALOG_URL = "https://raw.githubusercontent.com/achristo714/RenderPost/main/models.json"   # the app setting "catalog_url" overrides it
+
+# Aggregator connectors for image/video PRODUCTION only — prompt-writing and vision analysis always
+# stay on fal. Empty by default on purpose: this app doesn't favor one aggregator. A provider is
+# added by merging one into the model catalog's "providers" section (see MODEL_CATALOG_URL above,
+# no rebuild needed) or pasted as a one-off "custom provider" in the app's Providers settings.
+# Each entry is declarative, not code — one generic engine (AggregatorProvider) reads any of them.
+# Two transport shapes:
+#
+#   REST — "transport": "rest_async" (submit, then poll until done) or "rest_sync" (submit returns
+#   the result directly). Args available to every {placeholder}: prompt, image_url, image_urls,
+#   width, height, aspect_ratio, resolution (image); prompt, image_url, image_urls, duration,
+#   resolution (video).
+#   {"label": "Vendor name", "transport": "rest_async", "base_url": "https://api.vendor.com",
+#    "auth": {"type": "header_template", "header": "Authorization", "template": "Key {key_id}:{key_secret}",
+#              "fields": ["key_id", "key_secret"]},        # or {"type": "bearer"/"oauth2", "fields": [...]}
+#    "operations": {
+#      "image": {"submit": {"method": "POST", "path": "/models/x/edit", "body": {"prompt": "{prompt}", "image_url": "{image_url}"}},
+#                 "poll": {"path": "/requests/{request_id}/status", "id_field": "id",
+#                           "status_field": "status", "done_value": "completed", "result_field": "result_url"}},
+#      "video": {...same shape...}},
+#    "price": {"image": 0.05, "video": {"480p": 0.05}}}     # same shape MODELS/VIDEO_MODELS price/mult already use
+#
+#   MCP — "transport": "mcp_http", a remote (not local/stdio) Streamable HTTP MCP server, e.g. one
+#   that lets automation spend the same subscription credits as a vendor's own web app instead of a
+#   separate paid API. "operations.<image|video>.steps" is an ordered list of MCP tool calls; each
+#   step's extracted "output_field" can be stashed as "output_as" for later steps to reference, and
+#   the LAST step's extraction is the operation's result:
+#   {"label": "Vendor name", "transport": "mcp_http", "mcp_url": "https://mcp.vendor.com/mcp",
+#    "auth": {"type": "oauth2", "authorize_url": "...", "token_url": "...", "scope": "...",
+#              "client_id": "..."},                  # a fixed client_id, OR:
+#    "auth": {"type": "oauth2", "authorize_url": "...", "token_url": "...", "scope": "...",
+#              "registration_endpoint": "..."},       # Dynamic Client Registration (RFC 7591) —
+#              # RenderPost registers itself fresh on every connect (no client_id needed up front;
+#              # a long-cached one would go stale anyway, since the redirect_uri's port changes
+#              # every launch via free_port()) and reuses the resulting client_id for token refresh.
+#    "operations": {"image": {"steps": [
+#      {"tool": "import_url", "arguments": {"url": "{image_url}"}, "output_as": "media_id", "output_field": "media_id"},
+#      {"tool": "generate_image", "arguments": {"prompt": "{prompt}", "media_id": "{media_id}"}, "output_as": "job_id", "output_field": "id"},
+#      {"tool": "wait_for_job", "arguments": {"id": "{job_id}"}, "output_field": "result_url"}
+#    ]}}}
+#   Needs the `mcp` pip package (requirements.txt, --collect-all mcp in build.bat/workflow),
+#   imported lazily so the app runs fine without it when no mcp_http provider is connected.
+#
+# A model or video-model entry opts into a provider with "provider": "<id>" (default, if absent: "fal").
+# Higgsfield ships built in, connected/toggled the same way a user-added provider would be — same
+# entry as docs/provider-example-higgsfield.json. Artlist and Nim.video are meant to join it the
+# same way once their own connection details are worked out; the engine above already supports
+# any of them equally, this dict just isn't required to stay empty.
+PROVIDERS = {"higgsfield": {
+    "label": "Higgsfield", "transport": "mcp_http", "mcp_url": "https://mcp.higgsfield.ai/mcp",
+    "auth": {"type": "oauth2", "authorize_url": "https://clerk.higgsfield.ai/oauth/authorize",
+             "token_url": "https://clerk.higgsfield.ai/oauth/token",
+             "registration_endpoint": "https://clerk.higgsfield.ai/oauth/register",
+             "scope": "openid email offline_access", "fields": ["access_token", "refresh_token"]},
+    "operations": {
+        "image": {"steps": [
+            {"tool": "media_import_url", "arguments": {"url": "{image_url}", "type": "image"},
+             "output_as": "media_id", "output_field": "media_id"},
+            {"tool": "media_import_url", "when": "character_url", "arguments": {"url": "{character_url}", "type": "image"},
+             "output_as": "character_media_id", "output_field": "media_id"},
+            {"tool": "generate_image_batch", "arguments": {"requests": [{"index": 0, "params": {
+                "model": "{higgsfield_model}", "variant": "{variant}", "quality": "{quality}",
+                "resolution": "{resolution}", "aspect_ratio": "{aspect_ratio}", "prompt": "{prompt}",
+                "declined_preset_id": "{declined_preset_id}",
+                "medias": [{"value": "{media_id}", "role": "image_references"},
+                            {"value": "{character_media_id}", "role": "image_references", "_when": "character_media_id"}],
+                "use_unlim": False}}]},
+             "output_as": "job_id", "output_field": "jobs.0.job_id"},
+            {"tool": "jobs_wait", "poll": True, "poll_done_field": "all_terminal",
+             "poll_delay_field": "poll_after_seconds", "poll_delay": 5,
+             "arguments": {"jobs": [{"index": 0, "job_id": "{job_id}"}], "timeout_seconds": 15},
+             "output_field": "jobs.0.result_url"}]},
+        "video": {"steps": [
+            {"tool": "media_import_url", "arguments": {"url": "{image_url}", "type": "image"},
+             "output_as": "media_id", "output_field": "media_id"},
+            {"tool": "media_import_url", "when": "character_url", "arguments": {"url": "{character_url}", "type": "image"},
+             "output_as": "character_media_id", "output_field": "media_id"},
+            {"tool": "generate_video_batch", "arguments": {"requests": [{"index": 0, "params": {
+                "model": "{higgsfield_model}", "mode": "{mode}", "sound": "{sound}", "quality": "{quality}",
+                "duration": "{duration}", "resolution": "{resolution}", "aspect_ratio": "16:9",
+                "generate_audio": "{generate_audio}", "prompt": "{prompt}",
+                "declined_preset_id": "{declined_preset_id}",
+                "medias": [{"value": "{media_id}", "role": "{frame_role}"},
+                            {"value": "{character_media_id}", "role": "image_references", "_when": "character_media_id"}],
+                "use_unlim": False}}]},
+             "output_as": "job_id", "output_field": "jobs.0.job_id"},
+            {"tool": "jobs_wait", "poll": True, "poll_done_field": "all_terminal",
+             "poll_delay_field": "poll_after_seconds", "poll_delay": 5,
+             "arguments": {"jobs": [{"index": 0, "job_id": "{job_id}"}], "timeout_seconds": 15},
+             "output_field": "jobs.0.result_url"}]},
+    }},
+    "nim": {
+    "label": "Nim.video", "transport": "mcp_http", "mcp_url": "https://mcp.nim.video/mcp",
+    # Verified live (direct unauthenticated HTTP, not guessed from docs): Nim's OAuth metadata and
+    # its Dynamic Client Registration response both report grant_types ["authorization_code"] only —
+    # no refresh_token grant, unlike Higgsfield. "fields" reflects that: _refresh_oauth() silently
+    # no-ops for this provider (self.creds never has a "refresh_token" to trade in), which is the
+    # correct behavior here, not a gap — a stale/expired access_token just means reconnecting.
+    # Nim's discovery metadata advertises no scope list at all, so none is requested here either.
+    "auth": {"type": "oauth2", "authorize_url": "https://mcp.nim.video/mcp/authorize",
+             "token_url": "https://mcp.nim.video/api/mcp/oauth/token",
+             "registration_endpoint": "https://mcp.nim.video/api/mcp/oauth/register",
+             "scope": "", "fields": ["access_token"]},
+    "operations": {
+        # Nim has no by-URL media import (verified live: a bare remote URL in "fileInputs" fails
+        # with "generation_unavailable") — every reference image goes through media_upload's two-phase
+        # mint-then-POST ("upload_from", see _mcp_upload_step) instead of a single import-by-URL call.
+        "image": {"steps": [
+            {"tool": "media_upload", "arguments": {}, "upload_from": "{image_url}",
+             "output_as": "media_url", "output_field": "file_url"},
+            {"tool": "media_upload", "when": "character_url", "arguments": {}, "upload_from": "{character_url}",
+             "output_as": "character_media_url", "output_field": "file_url"},
+            {"tool": "generate_image", "arguments": {
+                "model_id": "{nim_model}", "model_name": "{nim_model_name}", "prompt": "{prompt}",
+                "resolution": "{resolution_upper}", "requestedAspectRatio": "{aspect_ratio_nim}",
+                # Nim's own "fileInputs" is a flat array of plain URL strings, not Higgsfield's
+                # role-tagged {value, role} objects — "_scalar" fills each item as a bare string
+                # instead of a dict (see _fill_template's docstring).
+                "fileInputs": [{"_scalar": "{media_url}"},
+                                {"_scalar": "{character_media_url}", "_when": "character_media_url"}]},
+             "output_as": "workflow_id", "output_field": "workflowId"},
+            {"tool": "get_generation_status", "poll": True, "poll_done_field": "status",
+             # Nim's status field reaches one of four terminal strings, not a single done flag —
+             # verified live (finished/failed/cancelled/removed) — see poll_done_value-as-list above.
+             "poll_done_value": ["finished", "failed", "cancelled", "removed"], "poll_delay": 5,
+             "arguments": {"workflowId": "{workflow_id}"}, "output_field": "mediaUrl"}]},
+        "video": {"steps": [
+            {"tool": "media_upload", "arguments": {}, "upload_from": "{image_url}",
+             "output_as": "media_url", "output_field": "file_url"},
+            {"tool": "media_upload", "when": "character_url", "arguments": {}, "upload_from": "{character_url}",
+             "output_as": "character_media_url", "output_field": "file_url"},
+            {"tool": "generate_video", "arguments": {
+                "model_id": "{nim_model}", "model_name": "{nim_model_name}", "prompt": "{prompt}",
+                "mediaLength": "{duration_ms}", "resolution": "{resolution}",
+                "fileInputs": [{"_scalar": "{media_url}"},
+                                {"_scalar": "{character_media_url}", "_when": "character_media_url"}]},
+             "output_as": "workflow_id", "output_field": "workflowId"},
+            {"tool": "get_generation_status", "poll": True, "poll_done_field": "status",
+             "poll_done_value": ["finished", "failed", "cancelled", "removed"], "poll_delay": 5,
+             "arguments": {"workflowId": "{workflow_id}"}, "output_field": "mediaUrl"}]},
+    }}}
+PROVIDER_TRANSPORTS = ("rest_async", "rest_sync", "mcp_http")
 VIDEO_DURATIONS = {"4": "4 s", "5": "5 s", "6": "6 s", "8": "8 s", "10": "10 s", "12": "12 s", "15": "15 s"}
 TAKE_DURATIONS = {"8": "8 s", "10": "10 s", "15": "15 s", "20": "20 s", "30": "30 s"}
 MUSIC_EXT = {".mp3", ".wav", ".m4a", ".aac"}
@@ -105,7 +402,8 @@ DEFAULT_CONFIG = {"fal_key": "", "model": "gpt-image-2.5-flare", "quality": "med
                   "resolution": "2K", "variations": "1", "angles": "6", "style_notes": "", "review_first": True,
                   "video_model": "h3max", "video_res": "480p", "show_all_models": False, "video_duration": "5", "take_duration": "15", "video_audio": True,
                   "crossfade": "0.6", "motion_notes": "", "shots": "1", "video_frames": "[]", "energy": "calm",
-                  "character_note": "", "character_desc": "", "take_character": False}
+                  "character_note": "", "character_desc": "", "take_character": False,
+                  "providers": {}, "custom_providers": {}}   # providers: {id: {credential fields..}}; custom_providers: {id: {...PROVIDERS shape}}
 
 
 # ---------------------------------------------------------------- config
@@ -123,6 +421,7 @@ def config_dir():
 
 FOLDER_FILE_LOCK = threading.Lock()   # renderpost.json is read-modify-written from worker threads and the UI; serialize it
 PHRASES_FILE_LOCK = threading.Lock()   # phrases.json is read-modify-written from the UI; serialize it
+CONFIG_FILE_LOCK = threading.Lock()   # see update_providers_config() — config.json's own save_config() path predates this and isn't covered
 FOLDER_KEYS = ("style_notes", "motion_notes", "video_frames", "character_note", "character_desc", "take_character", "spend")
 LEGACY_MODELS = {"gpt-image-2": "gpt-image-2.5-flare"}     # saved config ids from older builds -> current id
 # GPT Image 2.5 is token priced. Estimate per image by quality and output long edge, from fal's published
@@ -162,9 +461,33 @@ def load_config():
     return cfg
 
 
+def _atomic_write_json(path, data):
+    """Write JSON without ever leaving `path` as a half-written file for a concurrent reader to
+    catch mid-write. Confirmed root cause of config.json's fal_key silently going blank (twice):
+    plain write_text() isn't atomic, a concurrent load_config() could read a truncated file while a
+    write was in progress, json.loads() raised, load_config()'s broad except fell back to
+    DEFAULT_CONFIG's blank fal_key, and whichever save_config() call used that snapshot wrote the
+    blank key straight back to disk. os.replace() is atomic on both Windows and POSIX — a reader of
+    `path` always sees either the complete old file or the complete new one, never a partial one."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    # os.replace() can transiently fail on Windows ("Access is denied") if something else briefly
+    # has the destination handle open (observed under heavy concurrent writes in testing) — retry
+    # rather than let one save silently fail.
+    for attempt in range(5):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.05)
+
+
 def save_config(cfg):
     user = {k: v for k, v in cfg.items() if k not in FOLDER_KEYS}
-    (config_dir() / "config.json").write_text(json.dumps(user, indent=2), encoding="utf-8")
+    with CONFIG_FILE_LOCK:
+        _atomic_write_json(config_dir() / "config.json", user)
     fp = folder_settings_path()
     if fp:
         with FOLDER_FILE_LOCK:
@@ -175,7 +498,28 @@ def save_config(cfg):
                 except Exception:
                     pass
             keep.update({k: cfg.get(k, "") for k in FOLDER_KEYS if k != "spend"})
-            fp.write_text(json.dumps(keep, indent=2), encoding="utf-8")
+            _atomic_write_json(fp, keep)
+
+
+def update_providers_config(mutate):
+    """Change "providers" or "custom_providers" in config.json without racing save_config()'s own
+    write (both now share CONFIG_FILE_LOCK and both write atomically — see _atomic_write_json).
+    Locks, re-reads config.json fresh from disk, lets `mutate` change just the dict it's handed,
+    writes that back. save_config() still round-trips a full cfg snapshot that can be stale by the
+    time it writes (if another request changed config.json in between) — the lock and atomic write
+    only rule out a torn/corrupted read, not that narrower staleness window; this function sidesteps
+    it entirely for providers/custom_providers by always mutating a freshly re-read dict instead."""
+    with CONFIG_FILE_LOCK:
+        p = config_dir() / "config.json"
+        cfg = {}
+        if p.exists():
+            try:
+                cfg = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        mutate(cfg)
+        _atomic_write_json(p, cfg)
+    return cfg
 
 
 def load_phrases():
@@ -499,7 +843,7 @@ class Fal:
                 last = e
         raise RuntimeError(f"Could not write a motion prompt ({last})")
 
-    def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False):
+    def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False, extra_urls=()):
         audio = bool(cfg.get("video_audio", True))
         if take:
             args = {"prompt": prompt, "image_urls": image_urls, "resolution": cfg["video_res"],
@@ -657,7 +1001,7 @@ class DemoFal:
             return " ".join(f"Glide through the space in [Image{i+1}]," for i in range(len(image_urls))) + " one continuous steadicam take, architecture unchanged." + (f" Client notes: {notes.strip()}" if notes.strip() else "")
         return "Slow push-in toward the far wall, curtains stirring, two people talking at a table, warm lamps flicker softly. Architecture, materials and lighting stay exactly as in the still." + (f" Client notes: {notes.strip()}" if notes.strip() else "")
 
-    def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False):
+    def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False, extra_urls=()):
         for _ in range(30):
             if cancelled():
                 raise Cancelled()
@@ -704,6 +1048,461 @@ class DemoFal:
         img.save(out_path, "PNG")
 
 
+# ---------------------------------------------------------------- aggregator providers
+_TEMPLATE_SKIP = object()   # internal marker: this templated dict/list item is dropped (its "_when" arg was falsy)
+
+
+def _fill_template(node, args):
+    """Fill a PROVIDERS operation template. A string that's exactly one "{key}" placeholder is
+    replaced with the raw arg (preserving its type, e.g. a list); a string with a placeholder mixed
+    into other text is filled in as text. Dicts/lists recurse.
+
+    A dict may carry a "_when": "<arg name>" key — if that arg is falsy/missing, the whole dict is
+    dropped from its parent list instead of being filled (the key itself is stripped before
+    filling). This is how an optional reference image (e.g. a character reference that may or may
+    not be present) gets conditionally included in a fixed-shape list like a "medias" array, without
+    the provider template needing to know whether one was actually passed.
+
+    A dict may instead carry a "_scalar": <template> key — it's filled and returned as that bare
+    value (still subject to "_when" above) rather than as a dict, for a provider whose reference
+    list is a flat array of strings rather than Higgsfield's role-tagged {value, role} objects (e.g.
+    Nim.video's "fileInputs": [url, url]) — "_when" alone can't conditionally drop a bare string from
+    a list (there's no dict to hang the key off), so this wraps one just long enough for that check.
+
+    A key whose filled value is exactly None is dropped from its parent dict entirely, rather than
+    sent as a literal null — this is how one shared operation template (e.g. Higgsfield's "video"
+    operation, reused by several different underlying models with different parameter schemas) omits
+    a parameter a given model doesn't accept: the model's own catalog entry simply doesn't supply
+    that template variable (a missing key reads back as None via args.get), or explicitly overrides
+    it to Python None to suppress a value that would otherwise come from a shared default."""
+    if isinstance(node, str):
+        if node.startswith("{") and node.endswith("}") and node.count("{") == 1:
+            return args.get(node[1:-1])
+        try:
+            return node.format(**args)
+        except (KeyError, IndexError):
+            return node
+    if isinstance(node, dict):
+        if "_when" in node:
+            if not args.get(node["_when"]):
+                return _TEMPLATE_SKIP
+            node = {k: v for k, v in node.items() if k != "_when"}
+        if "_scalar" in node:
+            return _fill_template(node["_scalar"], args)
+        filled = {k: _fill_template(v, args) for k, v in node.items()}
+        return {k: v for k, v in filled.items() if v is not None}
+    if isinstance(node, list):
+        filled = (_fill_template(v, args) for v in node)
+        return [v for v in filled if v is not _TEMPLATE_SKIP]
+    return node
+
+
+def _dig(obj, path):
+    """Read a dotted field path out of a parsed JSON response — "video.url" for a nested object,
+    or "images.0.url" where a segment is a numeric list index (e.g. Higgsfield's image results
+    come back as an "images" array of {"url": ...} objects, not a single object)."""
+    cur = obj
+    for part in str(path).split("."):
+        if isinstance(cur, dict):
+            cur = cur.get(part)
+        elif isinstance(cur, list) and part.lstrip("-").isdigit():
+            i = int(part)
+            cur = cur[i] if -len(cur) <= i < len(cur) else None
+        else:
+            return None
+    return cur
+
+
+def _nearest_ratio(w, h, allowed):
+    """Pick the string in `allowed` (each a plain "W:H" aspect ratio) numerically closest to the
+    real w/h — used when a provider's aspect ratio is a closed enum rather than accepting the exact
+    computed fraction the way Higgsfield's API does (verified live: Nim's GPT Image 2.5 Flare/
+    Sunburst default to a flat 16:9 when the field is simply omitted, regardless of the source
+    image's own aspect — passing the nearest real enum value instead is what makes the output
+    actually match, or come close to, what was fed in)."""
+    target = w / h
+    def val(r):
+        a, b = r.split(":")
+        return float(a) / float(b)
+    return min(allowed, key=lambda r: abs(val(r) - target))
+
+
+_MODEL_CATALOG_STRUCTURAL_KEYS = {"label", "kind", "endpoint", "i2v", "provider", "price", "mult",
+                                    "hint", "recommended", "res", "min_duration", "price_table", "durations", "quality_opts"}
+
+
+def _model_extra_args(model_entry):
+    """Any field on a MODELS/VIDEO_MODELS catalog entry beyond the structural ones (label, price,
+    provider, ...) is a provider-specific template variable — e.g. two catalog entries can route to
+    the same aggregator provider but pick a different model "variant" by each declaring their own
+    "variant" field, which then fills a provider template's own {variant} placeholder."""
+    return {k: v for k, v in (model_entry or {}).items() if k not in _MODEL_CATALOG_STRUCTURAL_KEYS}
+
+
+_PRESET_DECLINE_RE = re.compile(r"declined_preset_id=([0-9a-fA-F-]{36})")
+
+
+async def _mcp_call_once(session, step, args):
+    tool_args = _fill_template(step.get("arguments", {}), args)
+    result = await session.call_tool(step["tool"], tool_args)
+    if getattr(result, "is_error", False):
+        text = "".join(getattr(c, "text", "") for c in (result.content or []))
+        # Not truncated here — _mcp_run_steps searches this text for a declined_preset_id to retry
+        # with, which a fixed-length cut could land past; friendly() truncates for display downstream.
+        raise RuntimeError(f"MCP tool \"{step['tool']}\" failed: {text or 'no details'}")
+    data = result.structured_content
+    if data is None:
+        text = next((c.text for c in (result.content or []) if getattr(c, "text", None)), None)
+        try:
+            data = json.loads(text) if text else {}
+        except (TypeError, ValueError):
+            data = {"text": text}
+    return data
+
+
+async def _mcp_upload_step(session, step, args):
+    """Mint a short-lived upload slot via an MCP tool (Nim.video's media_upload — called with
+    whatever "arguments" the step declares, typically none), then push the actual file bytes to
+    that slot as a plain multipart/form-data HTTP POST — not a second MCP tool call. Confirmed
+    live that Nim has no by-URL import tool at all (a bare remote URL in "fileInputs" fails with
+    "generation_unavailable") and that media_upload's returned URL already carries its own
+    short-lived auth token in the query string, so no extra header is sent on the POST."""
+    mint = await _mcp_call_once(session, step, args)
+    upload_url = _dig(mint, step.get("upload_url_field", "upload_url"))
+    if not upload_url:
+        raise RuntimeError(f"MCP tool \"{step['tool']}\" did not return an upload URL.")
+    source = _fill_template(step["upload_from"], args)
+    req = urllib.request.Request(source, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        file_bytes = r.read()
+    boundary = uuid.uuid4().hex
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"upload.bin\"\r\n"
+            f"Content-Type: application/octet-stream\r\n\r\n").encode("utf-8") + file_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    up_req = urllib.request.Request(upload_url, data=body, method="POST",
+                                      headers={"Content-Type": f"multipart/form-data; boundary={boundary}",
+                                               "User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+    with urllib.request.urlopen(up_req, timeout=120) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+async def _mcp_run_steps(url, headers, steps, args, cancelled):
+    """Run an ordered sequence of MCP tool calls against a remote (Streamable HTTP) MCP server —
+    e.g. upload an image, generate, wait for the job, fetch the result — accumulating each step's
+    extracted output into `args` so later steps can reference it. Returns the last step's
+    extracted value. Needs the `mcp` package; imported lazily here so the app runs fine without it
+    when no mcp_http provider is connected (same convention as Fal's lazy `import fal_client`).
+    Auth headers go on a dedicated httpx2 client passed to streamable_http_client — that function
+    takes an http_client, not a headers dict, so this app is the one responsible for its lifecycle.
+
+    A step with "poll": true (e.g. a long-poll status/wait tool like Higgsfield's jobs_wait, which
+    only blocks up to ~15s per call and expects to be called again until done) repeats the SAME
+    tool call until "poll_done_field" reads "poll_done_value" (default: true) — or, if
+    "poll_done_value" is a list (e.g. Nim.video's get_generation_status, verified live to reach one
+    of four terminal strings: finished/failed/cancelled/removed, not a single done flag), until it
+    reads any value in that list — sleeping between attempts for however long the response's own
+    "poll_delay_field" says to wait (falling back to a fixed few seconds), up to "poll_max_attempts"
+    (default 60) before giving up.
+
+    A step with "upload_from": "<template>" (e.g. Nim.video's media_upload, verified live to have no
+    import-by-URL tool at all) is a two-phase upload instead of a plain tool call: the MCP tool call
+    mints a short-lived upload slot, then this app itself POSTs the actual file bytes — fetched from
+    the URL "upload_from" resolves to — straight to that slot as a plain multipart/form-data
+    request, no MCP tool call for the byte transfer itself. See _mcp_upload_step()."""
+    import mcp
+    import httpx2
+    from mcp.client.streamable_http import streamable_http_client
+    out = None
+    async with (
+        httpx2.AsyncClient(headers=headers, timeout=60) as http_client,
+        streamable_http_client(url, http_client=http_client) as (read, write),
+        mcp.ClientSession(read, write, client_info=mcp.types.Implementation(name=APP_NAME, version=APP_VERSION)) as session,
+    ):
+        await session.initialize()
+        for step in steps:
+            if step.get("when") and not args.get(step["when"]):
+                continue   # optional step (e.g. importing a character reference that wasn't provided) — skipped entirely
+            if step.get("poll"):
+                done_field, done_value = step.get("poll_done_field", "done"), step.get("poll_done_value", True)
+                for _attempt in range(step.get("poll_max_attempts", 60)):
+                    if cancelled():
+                        raise Cancelled()
+                    data = await _mcp_call_once(session, step, args)
+                    val = _dig(data, done_field)
+                    done = (val in done_value) if isinstance(done_value, (list, tuple)) else (val == done_value)
+                    if done:
+                        break
+                    delay = _dig(data, step.get("poll_delay_field", "")) or step.get("poll_delay", 3)
+                    await asyncio.sleep(float(delay))
+                else:
+                    raise RuntimeError(f"MCP tool \"{step['tool']}\" never reported done after {step.get('poll_max_attempts', 60)} attempts.")
+            elif step.get("upload_from"):
+                if cancelled():
+                    raise Cancelled()
+                data = await _mcp_upload_step(session, step, args)
+            else:
+                if cancelled():
+                    raise Cancelled()
+                try:
+                    data = await _mcp_call_once(session, step, args)
+                except RuntimeError as e:
+                    # generate_image_batch/generate_video_batch can intercept a literal submission
+                    # with "a preset was recommended instead" and refuse to submit — this is Higgsfield
+                    # matching the prompt against its own preset library, not a real failure, and its
+                    # own error text names the exact retry: resubmit once with declined_preset_id set
+                    # to force the literal request through. Verified live (Kling 3.0 Pro, 2026-10-01).
+                    m = _PRESET_DECLINE_RE.search(str(e))
+                    if not m:
+                        raise
+                    data = await _mcp_call_once(session, step, {**args, "declined_preset_id": m.group(1)})
+            field = step.get("output_field")
+            out = _dig(data, field) if field else data
+            if step.get("output_as"):
+                args[step["output_as"]] = out
+    return out
+
+
+class AggregatorProvider:
+    """Generic client for one declarative PROVIDERS entry. Only implements what State needs for
+    production calls — edit() and video() — never prompt-writing or vision analysis, which always
+    stay on fal. One engine serves any conforming provider definition; see PROVIDERS above."""
+    def __init__(self, provider_id, defn, creds):
+        self.id = provider_id
+        self.defn = defn
+        self.creds = creds or {}
+
+    def label(self):
+        return self.defn.get("label", self.id)
+
+    def _headers(self):
+        auth = self.defn.get("auth", {})
+        if auth.get("type") == "header_template":
+            try:
+                value = auth["template"].format(**self.creds)
+            except KeyError as e:
+                raise RuntimeError(f"{self.label()}: missing credential {e}.")
+            return {auth.get("header", "Authorization"): value}
+        if auth.get("type") in ("bearer", "oauth2"):
+            return {"Authorization": f"Bearer {self.creds.get('access_token', '')}"}
+        return {}
+
+    def _refresh_oauth(self):
+        """One retry after a 401: trade the stored refresh_token for a fresh access_token, silently —
+        this is what keeps an oauth2 provider headless after its one-time interactive connect."""
+        auth = self.defn.get("auth", {})
+        if auth.get("type") != "oauth2" or not self.creds.get("refresh_token"):
+            return False
+        data = urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": self.creds["refresh_token"],
+                                         "client_id": self.creds.get("client_id") or auth.get("client_id", "")}).encode()
+        req = urllib.request.Request(auth["token_url"], data=data, method="POST",
+                                       headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            tok = json.loads(r.read().decode("utf-8"))
+        if not tok.get("access_token"):
+            return False
+        self.creds["access_token"] = tok["access_token"]
+        self.creds["refresh_token"] = tok.get("refresh_token", self.creds["refresh_token"])
+        update_providers_config(lambda c: c.setdefault("providers", {}).__setitem__(self.id, self.creds))
+        return True
+
+    def _request(self, method, url, body=None, _retried=False):
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        headers = {"User-Agent": f"{APP_NAME}/{APP_VERSION}", **self._headers()}
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                raw = r.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 401 and not _retried and self._refresh_oauth():
+                return self._request(method, url, body, _retried=True)
+            raise
+        return json.loads(raw.decode("utf-8")) if raw else {}
+
+    def _call(self, op, args, cancelled=lambda: False):
+        op_def = (self.defn.get("operations") or {}).get(op)
+        if not op_def:
+            raise RuntimeError(f"{self.label()} has no {op} operation configured.")
+        if self.defn.get("transport") == "mcp_http":
+            return self._call_mcp(op_def, args, cancelled)
+        return self._call_rest(op_def, args, cancelled)
+
+    def _call_mcp(self, op_def, args, cancelled, _retried=False):
+        steps = op_def.get("steps")
+        if not steps:
+            raise RuntimeError(f"{self.label()} has no steps configured for this operation.")
+        # Every call opens a brand-new session (streamable_http_client + ClientSession) from scratch —
+        # confirmed live that session.initialize() itself can fail transiently on an otherwise-healthy
+        # connection/model/account (reproduced and ruled out independently; a retry with a fresh
+        # session succeeds). Same attempts/backoff as with_retry() elsewhere, not that helper itself,
+        # because the 401 check needs the unwrapped leaf exception (see below), not str(e) on the
+        # TaskGroup wrapper with_retry would see.
+        attempts, delay = 3, 4
+        out = None
+        for i in range(attempts):
+            try:
+                out = asyncio.run(_mcp_run_steps(self.defn["mcp_url"], self._headers(), steps, dict(args), cancelled))
+                break
+            except Cancelled:
+                raise
+            except Exception as e:
+                # asyncio.TaskGroup (used internally by the mcp SDK's streamable_http_client) wraps the
+                # real failure in an opaque "unhandled errors in a TaskGroup (N sub-exception)" shell —
+                # str(e) on that tells the user nothing and defeats friendly()'s message matching (a 401
+                # or timeout buried inside stays invisible). Unwrap to the real leaf exception so both
+                # the 401-retry check below and the message that reaches the UI reflect the actual cause.
+                cause = e
+                while getattr(cause, "exceptions", None):
+                    cause = cause.exceptions[0]
+                msg = str(cause)
+                # Full detail to stdout (log.txt in the exe) — the message that reaches the UI is kept
+                # short by design, but this class of error (a real API's exact failure reason, buried
+                # under an MCP/asyncio transport wrapper) has needed the full traceback to diagnose.
+                code, data = getattr(cause, "code", None), getattr(cause, "data", None)
+                print(f"{self.label()} MCP call failed ({type(cause).__name__}): {msg} | code={code!r} data={data!r}", flush=True)
+                traceback.print_exc()
+                if ("401" in msg or "unauthorized" in msg.lower()) and not _retried and self._refresh_oauth():
+                    return self._call_mcp(op_def, args, cancelled, _retried=True)
+                if i == attempts - 1:
+                    raise RuntimeError(f"{self.label()}: {msg}") from e
+                time.sleep(delay); delay *= 2
+        if not out:
+            raise RuntimeError(f"{self.label()} finished but returned no result.")
+        return out
+
+    def _call_rest(self, op_def, args, cancelled=lambda: False):
+        submit = op_def["submit"]
+        body = _fill_template(submit.get("body", {}), args)
+        url = self.defn["base_url"].rstrip("/") + submit["path"].format(**args)
+        result = with_retry(lambda: self._request(submit.get("method", "POST"), url, body), attempts=2)
+        poll = op_def.get("poll")
+        if not poll:
+            out = _dig(result, op_def.get("result_field", "result_url"))
+            if not out:
+                raise RuntimeError(f"{self.label()} returned no result.")
+            return out
+        req_id = _dig(result, poll.get("id_field", "id"))
+        if not req_id:
+            raise RuntimeError(f"{self.label()} submitted the job but returned no request id.")
+        poll_url = self.defn["base_url"].rstrip("/") + poll["path"].format(request_id=req_id)
+        status_field, done_value, result_field = poll.get("status_field", "status"), poll.get("done_value", "completed"), poll.get("result_field", "result_url")
+        while True:
+            if cancelled():
+                raise Cancelled()
+            pr = with_retry(lambda: self._request("GET", poll_url), attempts=2)
+            status = _dig(pr, status_field)
+            if status == done_value:
+                out = _dig(pr, result_field)
+                if not out:
+                    raise RuntimeError(f"{self.label()} finished but returned no result.")
+                return out
+            if status in ("failed", "error", "cancelled"):
+                raise RuntimeError(f"{self.label()} reported the job {status}.")
+            time.sleep(2.0)
+
+    def edit(self, image_url, prompt, cfg, src_dims, cancelled=lambda: False, extra_urls=()):
+        w, h = src_dims
+        g = math.gcd(int(w), int(h)) or 1
+        # _model_extra is spread last so a catalog entry's own declared value (including an explicit
+        # None, dropped by _fill_template) can override a live-cfg default below it — e.g. suppressing
+        # "quality" for a model that has no such parameter, regardless of what the UI's quality
+        # selector currently shows (it's hidden, but cfg still holds its last value).
+        extra = cfg.get("_model_extra", {})
+        args = {"prompt": prompt, "image_url": image_url, "image_urls": [image_url] + list(extra_urls),
+                "character_url": extra_urls[0] if extra_urls else "",
+                "width": w, "height": h, "aspect_ratio": f"{int(w)//g}:{int(h)//g}",
+                "resolution": str(cfg.get("resolution", "")).lower(),
+                # Same value, original case ("1K"/"2K"/"4K") — Higgsfield's API wants it lowercased
+                # (above), but Nim.video's allowedValues are exact-case "1K"/"2K"/"4K"; verified live.
+                "resolution_upper": cfg.get("resolution", ""), "quality": cfg.get("quality", ""),
+                **extra}
+        # A model whose quality tiers are each a separate provider-side model id rather than fal/
+        # Higgsfield's single adjustable "quality" parameter (verified live: Nim's GPT Image 2.5
+        # Flare/Sunburst) declares "quality_model_ids"/"quality_model_names" ({quality: id/name})
+        # to switch which underlying model this call actually hits, keyed by the UI's live Quality
+        # selection — the catalog's own "quality" dict (consumed by the frontend) restricts that
+        # selector to exactly the tiers this map covers.
+        qmap = extra.get("quality_model_ids")
+        if qmap and cfg.get("quality") in qmap:
+            args["nim_model"] = qmap[cfg["quality"]]
+            args["nim_model_name"] = (extra.get("quality_model_names") or {}).get(cfg["quality"], args.get("nim_model_name"))
+        # Nim's own aspect ratio is a closed enum per model, not an arbitrary fraction the way
+        # Higgsfield's API accepts — verified live: GPT Image 2.5 Flare/Sunburst default to a flat
+        # 16:9 whenever this field is simply omitted, regardless of the source image's own aspect.
+        # "nim_aspect_ratios" is either the literal string "auto" (some Consistency/Edit models —
+        # verified live for Nano Banana Pro Edit/2 — accept this and preserve the input's own aspect
+        # directly, no computation needed) or that model's allowed list, in which case the exact
+        # computed "aspect_ratio" is used when it's already one of them, else the nearest one.
+        ratios = extra.get("nim_aspect_ratios")
+        if ratios == "auto":
+            args["aspect_ratio_nim"] = "auto"
+        elif ratios:
+            args["aspect_ratio_nim"] = args["aspect_ratio"] if args["aspect_ratio"] in ratios else _nearest_ratio(w, h, ratios)
+        return [self._call("image", args, cancelled)]
+
+    def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False, extra_urls=()):
+        # See edit()'s comment: _model_extra spread last lets a catalog entry fix or suppress a
+        # parameter (e.g. a model with no resolution control) regardless of the live cfg default.
+        # A model whose resolution-equivalent tier isn't literally called "resolution" at the API
+        # level (e.g. Kling's "mode": std/pro/4k, Veo's "quality": basic/high/ultra) declares
+        # "res_param" to redirect the UI's Resolution control into that field instead.
+        extra = cfg.get("_model_extra", {})
+        res_key = extra.get("res_param") or "resolution"
+        res_val = cfg.get("video_res", "")
+        # Some providers' real API resolution strings don't match this UI's own lowercase dropdown
+        # values (verified live: Nim's MiniMax H3 Max wants exact-case "480P"/"768P") — "res_case":
+        # "upper" transforms the live selection's case without needing separate dropdown option
+        # strings just to satisfy one provider's casing.
+        if extra.get("res_case") == "upper":
+            res_val = str(res_val).upper()
+        # Some models (verified live: MiniMax H3) reject start_image/end_image combined with a
+        # reference image ("start_image/end_image cannot be mixed with reference media") — a
+        # character reference there has to replace start_image's role with image_references too,
+        # not add alongside it. "char_ref_exclusive" on the catalog entry opts a model into that.
+        frame_role = "image_references" if (extra_urls and extra.get("char_ref_exclusive")) else "start_image"
+        duration = int(cfg.get("take_duration") if take else cfg.get("video_duration") or 0)
+        args = {"prompt": prompt, "image_url": image_urls[0], "image_urls": list(image_urls),
+                "duration": duration, "duration_ms": duration * 1000,   # Nim.video's "mediaLength" is milliseconds, not seconds
+                res_key: res_val,
+                "character_url": extra_urls[0] if extra_urls else "",
+                "frame_role": frame_role,
+                **extra}
+        # Same idea as edit()'s "quality_model_ids", but keyed by the Resolution dropdown's value —
+        # for a model whose "resolution" tier is really a separate provider-side model id with no
+        # runtime resolution parameter at all (verified live: Nim's Kling 3.0 Standard/Pro both
+        # forbid a "resolution" argument outright; Standard vs Pro IS the model choice).
+        rmap = extra.get("res_model_ids")
+        if rmap and cfg.get("video_res") in rmap:
+            args["nim_model"] = rmap[cfg["video_res"]]
+            args["nim_model_name"] = (extra.get("res_model_names") or {}).get(cfg["video_res"], args.get("nim_model_name"))
+        return self._call("video", args, cancelled)
+
+    def download(self, url, out_path):
+        # A bare urllib request (no User-Agent at all) gets a flat 403 from Nim.video's CDN —
+        # confirmed live: the exact same URL succeeds with curl (which sends its own UA) and fails
+        # with plain urlopen(). Every other outbound request in this class already sends one
+        # (_request(), _mcp_upload_step()); this was the one spot that didn't.
+        req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            out_path.write_bytes(resp.read())
+
+
+class DemoAggregator:
+    """Fakes an aggregator provider so --demo mode can exercise provider-backed models too,
+    without needing real credentials. Delegates to DemoFal's own fakes."""
+    def __init__(self, provider_id=None):
+        self._demo = DemoFal()
+
+    def edit(self, *a, **kw):
+        return self._demo.edit(*a, **kw)
+
+    def video(self, *a, **kw):
+        return self._demo.video(*a, **kw)
+
+    def download(self, *a, **kw):
+        return self._demo.download(*a, **kw)
+
+
 # ---------------------------------------------------------------- state + jobs
 class State:
     def __init__(self):
@@ -723,6 +1522,29 @@ class State:
         self.video_dir = None
         self.clips = []            # list of dicts, see new_clip()
         self.clip_urls = {}        # (name,file) -> fal url of the uploaded enhanced image
+        self.providers = {}        # provider id -> AggregatorProvider/DemoAggregator, lazily built
+
+    def generator_for(self, model_entry):
+        """fal (default) or an aggregator client, per this model/video-model catalog entry's
+        "provider" field. Only used for the two production calls (edit/video) — prompt-writing and
+        vision analysis always go through self.fal directly, never through this."""
+        pid = (model_entry or {}).get("provider", "fal")
+        if pid == "fal":
+            return self.fal
+        if pid in self.providers:
+            return self.providers[pid]
+        if DEMO:
+            client = DemoAggregator(pid)
+        else:
+            defn = PROVIDERS.get(pid)
+            if not defn:
+                raise RuntimeError(f"Unknown provider \"{pid}\". Check it's connected in Providers settings.")
+            creds = load_config().get("providers", {}).get(pid)
+            if not creds:
+                raise RuntimeError(f"{defn.get('label', pid)} isn't connected. Connect it in Providers settings first.")
+            client = AggregatorProvider(pid, defn, creds)
+        self.providers[pid] = client
+        return client
 
     def scan(self):
         meta = {}
@@ -783,14 +1605,22 @@ class State:
         self.video_dir.mkdir(exist_ok=True)
         (self.video_dir / "clips.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
 
+    def _clip_cfg_fields(self, kind, cfg):
+        """resolution/vmodel/duration/shots/char_ref derived from the current settings for a clip
+        of this kind — shared by new_clip() and by /api/video/prompts' draft_for() reuse path, so a
+        reused draft can't keep a stale model/resolution from whenever it was first created (e.g.
+        a model that's since been removed from the catalog entirely)."""
+        return {"resolution": ("1080p" if cfg.get("video_model") == "kling" else cfg["video_res"]) if kind == "clip" else cfg["video_res"],
+                "vmodel": None if kind == "reel" else ("seedance" if kind == "take" else cfg.get("video_model", "seedance")),
+                "duration": cfg["take_duration"] if kind == "take" else cfg["video_duration"],
+                "shots": cfg.get("shots", "1") if kind == "clip" else None,
+                "char_ref": False}
+
     def new_clip(self, kind, sources, cfg):
         cid = f"{int(time.time()*1000)}{len(self.clips):02d}"
         c = {"id": cid, "kind": kind, "sources": sources, "prompt": "", "file": None,
              "status": "queued", "step": "waiting", "error": None, "seconds": None, "made": None,
-             "resolution": ("1080p" if cfg.get("video_model") == "kling" else cfg["video_res"]) if kind == "clip" else cfg["video_res"],
-             "vmodel": None if kind == "reel" else ("seedance" if kind == "take" else cfg.get("video_model", "seedance")),
-             "duration": cfg["take_duration"] if kind == "take" else cfg["video_duration"],
-             "shots": cfg.get("shots", "1") if kind == "clip" else None}
+             **self._clip_cfg_fields(kind, cfg)}
         with self.lock:
             self.clips.append(c)
         return c
@@ -844,9 +1674,11 @@ class State:
             with_char = False
             if take and cfg.get("take_character") and self.character_path():
                 urls = urls + [self.character_url()]; with_char = True
-            elif not take:
-                src0 = c["sources"][0]; it0 = self.items.get(src0["name"], {})
-                with_char = any(v.get("character") for v in it0.get("versions", []) if v["file"] == src0["file"])
+            elif not take and c.get("char_ref") and self.character_path():
+                # Explicit per-clip "Reference character" checkbox (Seedance 2.5 / MiniMax H3 via
+                # Higgsfield only) — independent of whether the picked frame was itself generated
+                # with character reference; simpler and more predictable than inferring from that.
+                with_char = True
             if cancelled():
                 raise Cancelled()
             if stage in ("prompt", "full") and not forced_prompt:
@@ -863,7 +1695,17 @@ class State:
                 raise Cancelled()
             self.clip_set(cid, prompt=prompt, step=f"generating {c['duration']}s" + ("" if c.get("vmodel") == "kling" else f" at {c['resolution']}"),
                           duration=cfg["take_duration"] if take else cfg["video_duration"])
-            url = self.fal.video(prompt, urls, cfg, take, cancelled)
+            vmodel_entry = VIDEO_MODELS.get(c.get("vmodel") or "seedance")
+            if vmodel_entry is None:
+                # A clip resubmitted directly (Make again) can carry a vmodel id that's since been
+                # removed from the catalog entirely (not just changed from the current selector) —
+                # generator_for(None) would silently fall through to fal with a mismatched cfg and
+                # crash on a fal-only field. Fail clearly instead.
+                raise RuntimeError(f"This clip's video model (\"{c.get('vmodel')}\") is no longer available. Remove this clip and make a new one.")
+            gen = self.generator_for(vmodel_entry)
+            clip_char_url = self.character_url() if (not take and with_char and c.get("vmodel") in CHAR_REFERENCE_VIDEO_MODELS) else None
+            url = gen.video(prompt, urls, {**cfg, "_model_extra": _model_extra_args(vmodel_entry)}, take, cancelled,
+                             extra_urls=[clip_char_url] if clip_char_url else ())
             self.clip_set(cid, step="downloading")
             self.video_dir.mkdir(exist_ok=True)
             base = "take" if take else Path(c["sources"][0]["file"]).stem
@@ -871,7 +1713,7 @@ class State:
             while (self.video_dir / f"{base}_clip{n:02d}.mp4").exists():
                 n += 1
             out = self.video_dir / f"{base}_clip{n:02d}.mp4"
-            self.fal.download(url, out)
+            gen.download(url, out)
             pr = probe_video(out)
             extra = {}
             if pr and pr[1]:
@@ -907,22 +1749,24 @@ class State:
             self.set(name, step=f"planning {n} angles")
             prompts = self.fal.write_angles(url, n, cfg.get("style_notes", ""), char)
             dims = image_dims(src_path) or it["src_size"] or [1920, 1080]
-            one = dict(cfg, variations="1")
+            model_entry = MODELS.get(cfg["model"])
+            one = dict(cfg, variations="1", _model_extra=_model_extra_args(model_entry))
+            gen = self.generator_for(model_entry)
             made = []
             for i, ptxt in enumerate(prompts, 1):
                 if cancelled():
                     raise Cancelled()
                 self.set(name, step=f"angle {i} of {len(prompts)}")
-                urls = self.fal.edit(url, ptxt, one, tuple(dims), cancelled, [char] if char else [])
+                urls = gen.edit(url, ptxt, one, tuple(dims), cancelled, [char] if char else [])
                 k = 1
                 while (self.out_dir / f"{name}_a{k:02d}.png").exists():
                     k += 1
                 out = self.out_dir / f"{name}_a{k:02d}.png"
                 tmp = out.with_suffix(".tmp.png")
-                self.fal.download(urls[0], tmp)
+                gen.download(urls[0], tmp)
                 shutil.move(str(tmp), str(out))
                 made.append({"file": out.name, "prompt": ptxt, "out_size": image_dims(out), "seconds": round(time.time() - t0),
-                             "model": cfg["model"], "quality": cfg["quality"] if MODELS[cfg["model"]]["kind"] == "gpt" else cfg["resolution"],
+                             "model": cfg["model"], "quality": cfg["quality"] if MODELS[cfg["model"]]["kind"] == "gpt" else (f'{cfg["quality"]} · {cfg["resolution"]}' if MODELS[cfg["model"]]["kind"] == "gptres" else cfg["resolution"]),
                              "made": time.strftime("%Y-%m-%d %H:%M"), "pick": False, "angle": True, "from": file})
                 with self.lock:
                     it["versions"] = it["versions"] + [made[-1]]
@@ -1010,6 +1854,9 @@ class State:
 
     def image_cost(self, cfg, n=1):
         m = MODELS.get(cfg["model"], {})
+        if m.get("price_table"):
+            q = m["price_table"].get(cfg.get("quality"), {})
+            return q.get(cfg.get("resolution"), 0) * n
         if m.get("price"):
             return m["price"] * (m.get("mult", {}).get(cfg.get("resolution"), 1)) * n
         q = GPT_IMAGE_EST.get(cfg.get("quality"), GPT_IMAGE_EST["high"])
@@ -1067,7 +1914,9 @@ class State:
             if cancelled():
                 raise Cancelled()
             self.set(name, prompt=prompt, step="enhancing")
-            urls = self.fal.edit(url, prompt, cfg, (w, h), cancelled, [char] if char else [])
+            model_entry = MODELS.get(cfg["model"])
+            gen = self.generator_for(model_entry)
+            urls = gen.edit(url, prompt, {**cfg, "_model_extra": _model_extra_args(model_entry)}, (w, h), cancelled, [char] if char else [])
             self.set(name, step="downloading")
             made = []
             for u in urls:
@@ -1076,11 +1925,11 @@ class State:
                     n += 1
                 out = self.out_dir / f"{name}_v{n:02d}.png"
                 tmp = out.with_suffix(".tmp.png")
-                self.fal.download(u, tmp)
+                gen.download(u, tmp)
                 shutil.move(str(tmp), str(out))
                 made.append({"file": out.name, "prompt": prompt, "out_size": image_dims(out),
                              "seconds": round(time.time() - t0), "model": cfg["model"],
-                             "quality": cfg["quality"] if MODELS[cfg["model"]]["kind"] == "gpt" else cfg["resolution"],
+                             "quality": cfg["quality"] if MODELS[cfg["model"]]["kind"] == "gpt" else (f'{cfg["quality"]} · {cfg["resolution"]}' if MODELS[cfg["model"]]["kind"] == "gptres" else cfg["resolution"]),
                              "made": time.strftime("%Y-%m-%d %H:%M"), "pick": False, "character": bool(char)})
             with self.lock:
                 it["versions"] = it["versions"] + made
@@ -1144,10 +1993,31 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(n) or b"{}")
 
     def do_GET(self):
-        path = urllib.parse.urlparse(self.path).path
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
         if path == "/":
             html = resource_path("web", "templates", "index.html").read_text(encoding="utf-8")
             return self._send(200, html, "text/html; charset=utf-8")
+        if path.startswith("/oauth/") and path.endswith("/callback"):
+            pid = path[len("/oauth/"):-len("/callback")]
+            q = urllib.parse.parse_qs(parsed.query)
+            pending = OAUTH_PENDING.pop(pid, None)
+            code, state = (q.get("code") or [""])[0], (q.get("state") or [""])[0]
+            page = lambda msg: self._send(200, f"<html><body style='font-family:sans-serif;padding:40px'>{msg}"
+                                                 "<p>You can close this tab.</p></body></html>", "text/html; charset=utf-8")
+            if not pending or state != pending["state"]:
+                return page("Connect request expired or didn't match. Go back to Render Post and try Connect again.")
+            defn = PROVIDERS.get(pid)
+            if not defn or not code:
+                return page("Something went wrong connecting. Go back to Render Post and try Connect again.")
+            try:
+                creds = _oauth_exchange(defn, code, pending["verifier"], f"http://127.0.0.1:{PORT}/oauth/{pid}/callback",
+                                          client_id=pending.get("client_id", ""))
+            except Exception as e:
+                return page(f"Connecting failed: {friendly(e)}")
+            update_providers_config(lambda c: c.setdefault("providers", {}).__setitem__(pid, creds))
+            STATE.providers.pop(pid, None)
+            return page(f"Connected to {defn.get('label', pid)}.")
         if path.startswith("/static/"):
             root = resource_path("web", "static").resolve()
             f = (root / urllib.parse.unquote(path[len("/static/"):])).resolve()
@@ -1164,14 +2034,19 @@ class Handler(BaseHTTPRequestHandler):
                 "character": {"file": "character.png?v=" + str(int(STATE.character_path().stat().st_mtime)) if STATE.character_path() else None,
                               "desc": cfg.get("character_desc", "")},
                 "version": APP_VERSION, "latest": LATEST, "catalog": {**CATALOG_STATUS, "url": cfg.get("catalog_url", "") or MODEL_CATALOG_URL},
-                "config": {k: v for k, v in cfg.items() if k != "fal_key"},
+                "config": {k: v for k, v in cfg.items() if k not in ("fal_key", "providers", "custom_providers")},
                 "size_options": SIZE_OPTIONS, "quality_options": QUALITY_OPTIONS,
-                "models": {k: {"label": v["label"], "kind": v["kind"], "hint": v["hint"], "price": v.get("price"), "mult": v.get("mult"), "recommended": v.get("recommended", False)} for k, v in MODELS.items()},
+                "models": {k: {"label": v["label"], "kind": v["kind"], "hint": v["hint"], "price": v.get("price"), "mult": v.get("mult"), "price_table": v.get("price_table"), "quality_opts": v.get("quality_opts"), "recommended": v.get("recommended", False), "provider": v.get("provider", "fal")} for k, v in MODELS.items()},
                 "res_options": RES_OPTIONS, "variation_options": VARIATION_OPTIONS, "angle_options": ANGLE_OPTIONS,
                 "picks": sum(1 for it in STATE.snapshot() for v in it["versions"] if v.get("pick")),
                 "spend": float(cfg.get("spend") or 0), "spend_alert": float(cfg.get("spend_alert") or 10),
                 "clips": STATE.clips_snapshot(),
-                "video": {"res": VIDEO_RES, "models": {k: {"label": v["label"], "hint": v["hint"], "price": v["price"], "res": v.get("res"), "recommended": v.get("recommended", False), "min_duration": v.get("min_duration", 1)} for k, v in VIDEO_MODELS.items()},
+                "providers": {k: {"label": v.get("label", k), "transport": v.get("transport"),
+                                    "fields": (v.get("auth") or {}).get("fields", []),
+                                    "auth_type": (v.get("auth") or {}).get("type"),
+                                    "connected": bool(cfg.get("providers", {}).get(k))}
+                              for k, v in PROVIDERS.items()},
+                "video": {"res": VIDEO_RES, "models": {k: {"label": v["label"], "hint": v["hint"], "price": v["price"], "res": v.get("res"), "durations": v.get("durations"), "recommended": v.get("recommended", False), "min_duration": v.get("min_duration", 1), "provider": v.get("provider", "fal"), "char_ref": k in CHAR_REFERENCE_VIDEO_MODELS} for k, v in VIDEO_MODELS.items()},
                           "durations": VIDEO_DURATIONS,
                           "take_durations": TAKE_DURATIONS, "ffmpeg": bool(ffmpeg_exe()),
                           "music": sorted(p.name for p in STATE.folder.iterdir() if p.is_file() and p.suffix.lower() in MUSIC_EXT)},
@@ -1255,6 +2130,12 @@ class Handler(BaseHTTPRequestHandler):
                 for c in STATE.clips:
                     if (cid is None or c["id"] == cid) and c["status"] in ("queued", "working"):
                         c["_cancel"] = True
+            return self._send(200, {"ok": True})
+        if path == "/api/video/char_ref":
+            # "Reference character" checkbox on a clip card (Seedance 2.5 / MiniMax H3 via Higgsfield
+            # only) — explicit per-clip control, independent of how the picked frame was generated.
+            STATE.clip_set(body.get("id"), char_ref=bool(body.get("on")))
+            STATE.save_clips()
             return self._send(200, {"ok": True})
         if path == "/api/export_images":
             rows = []
@@ -1371,7 +2252,6 @@ class Handler(BaseHTTPRequestHandler):
             STATE.cancel(body.get("name"))
             return self._send(200, {"ok": True})
         if path == "/api/add_images":
-            import base64
             added = 0
             for f in body.get("files") or []:
                 name = Path(str(f.get("name") or "")).name
@@ -1391,7 +2271,6 @@ class Handler(BaseHTTPRequestHandler):
             STATE.scan()
             return self._send(200, {"ok": True, "added": added})
         if path == "/api/character/upload":
-            import base64
             data = body.get("data") or ""
             if "," in data:
                 data = data.split(",", 1)[1]
@@ -1494,6 +2373,67 @@ class Handler(BaseHTTPRequestHandler):
             phrases = [p for p in phrases if p["id"] != pid]
             save_phrases(phrases)
             return self._send(200, {"ok": True, "phrases": phrases})
+        if path == "/api/providers/custom":
+            pid = str(body.get("id") or "").strip()
+            if body.get("remove"):
+                update_providers_config(lambda c: c.get("custom_providers", {}).pop(pid, None))
+                return self._send(200, {"ok": True})
+            defn = body.get("definition")
+            if not pid or not isinstance(defn, dict):
+                return self._send(400, {"error": "Need a provider id and a definition object."})
+            if not _provider_defn_valid(defn):
+                return self._send(400, {"error": "Definition needs a transport (rest_async/rest_sync/mcp_http), operations, and base_url (or mcp_url for mcp_http)."})
+            update_providers_config(lambda c: c.setdefault("custom_providers", {}).__setitem__(pid, defn))
+            _merge_providers({pid: defn})
+            return self._send(200, {"ok": True})
+        if path == "/api/providers/connect":
+            pid = str(body.get("id") or "").strip()
+            if pid not in PROVIDERS:
+                return self._send(404, {"error": "Unknown provider."})
+            fields = body.get("fields") or {}
+            needed = (PROVIDERS[pid].get("auth") or {}).get("fields", [])
+            if needed and not all(str(fields.get(f, "")).strip() for f in needed):
+                return self._send(400, {"error": "Fill in every field."})
+            creds = {k: str(v).strip() for k, v in fields.items()}
+            update_providers_config(lambda c: c.setdefault("providers", {}).__setitem__(pid, creds))
+            STATE.providers.pop(pid, None)   # rebuild with the new credentials next time it's used
+            return self._send(200, {"ok": True})
+        if path == "/api/providers/oauth/start":
+            # One-time interactive step for an oauth2 provider: open the system browser to its
+            # authorize URL. Every actual generation call afterward is headless, using the stored
+            # (and auto-refreshed) token — see /oauth/<id>/callback below.
+            pid = str(body.get("id") or "").strip()
+            defn = PROVIDERS.get(pid)
+            auth = (defn or {}).get("auth") or {}
+            if not defn or auth.get("type") != "oauth2":
+                return self._send(404, {"error": "Unknown OAuth provider."})
+            if DEMO:
+                # Demo mode fakes the whole browser round-trip so Connect/Disconnect and the
+                # dropdown-gating UI can be exercised without a real account — matches how DemoFal
+                # already stands in for fal.ai everywhere else in --demo mode.
+                update_providers_config(lambda c: c.setdefault("providers", {}).__setitem__(pid, {"access_token": "demo", "refresh_token": "demo"}))
+                STATE.providers.pop(pid, None)
+                return self._send(200, {"ok": True, "demo": True})
+            redirect_uri = f"http://127.0.0.1:{PORT}/oauth/{pid}/callback"
+            client_id = auth.get("client_id", "")
+            if auth.get("registration_endpoint"):
+                try:
+                    client_id = _oauth_register(auth, redirect_uri)
+                except Exception as e:
+                    return self._send(500, {"error": f"Couldn't register with {defn.get('label', pid)}: {friendly(e)}"})
+            verifier = base64.urlsafe_b64encode(secrets.token_bytes(40)).decode().rstrip("=")
+            challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+            state = secrets.token_hex(16)
+            OAUTH_PENDING[pid] = {"verifier": verifier, "state": state, "client_id": client_id}
+            params = {"client_id": client_id, "response_type": "code", "redirect_uri": redirect_uri,
+                      "scope": auth.get("scope", ""), "state": state,
+                      "code_challenge": challenge, "code_challenge_method": "S256"}
+            return self._send(200, {"ok": True, "url": auth["authorize_url"] + "?" + urllib.parse.urlencode(params)})
+        if path == "/api/providers/disconnect":
+            pid = str(body.get("id") or "").strip()
+            update_providers_config(lambda c: c.get("providers", {}).pop(pid, None))
+            STATE.providers.pop(pid, None)
+            return self._send(200, {"ok": True})
         if not cfg["fal_key"] and not DEMO:
             return self._send(400, {"error": "Add your fal key first."})
         if STATE.fal is None:
@@ -1550,13 +2490,13 @@ class Handler(BaseHTTPRequestHandler):
             if body.get("mode") == "take":
                 c = draft_for("take", picks) or STATE.new_clip("take", picks, cfg)
                 with STATE.lock:
-                    c.update(status="queued", step="waiting", error=None, _cancel=False, sources=picks)
+                    c.update(status="queued", step="waiting", error=None, _cancel=False, sources=picks, **STATE._clip_cfg_fields("take", cfg))
                 made.append(c["id"]); STATE.pool.submit(STATE._clip_job, c["id"], stage, None, cfg)
             else:
                 for pk in picks:
                     c = draft_for("clip", [pk]) or STATE.new_clip("clip", [pk], cfg)
                     with STATE.lock:
-                        c.update(status="queued", step="waiting", error=None, _cancel=False)
+                        c.update(status="queued", step="waiting", error=None, _cancel=False, **STATE._clip_cfg_fields("clip", cfg))
                     made.append(c["id"]); STATE.pool.submit(STATE._clip_job, c["id"], stage, None, cfg)
             STATE.save_clips()
             return self._send(200, {"ok": True, "ids": made})
@@ -1675,27 +2615,86 @@ LATEST = {"version": None, "url": None}
 CATALOG_STATUS = {"url": "", "ok": None, "note": ""}
 
 
+PORT = None                     # set once main() binds the server; used to build the OAuth redirect_uri
+OAUTH_PENDING = {}              # provider id -> {"verifier": ..., "state": ...} for an in-flight one-time connect
+
+
+def _provider_defn_valid(v):
+    if not (isinstance(v, dict) and v.get("transport") in PROVIDER_TRANSPORTS and v.get("operations")):
+        return False
+    return bool(v.get("mcp_url")) if v["transport"] == "mcp_http" else bool(v.get("base_url"))
+
+
+def _merge_providers(d):
+    for k, v in (d or {}).items():
+        if _provider_defn_valid(v):
+            PROVIDERS[k] = {**PROVIDERS.get(k, {}), **v}
+
+
+def _oauth_register(auth, redirect_uri):
+    """Dynamic Client Registration (RFC 7591): some providers (e.g. Higgsfield's Clerk-backed
+    auth) let any new client register itself on the spot instead of requiring a pre-arranged
+    client_id — this is how RenderPost gets one without contacting the vendor first. Registered
+    fresh at the start of every connect flow rather than cached long-term, since RenderPost's own
+    redirect_uri port (free_port()) changes on every launch and a stale registration's redirect_uri
+    would no longer match."""
+    body = json.dumps({"client_name": APP_NAME, "redirect_uris": [redirect_uri], "token_endpoint_auth_method": "none",
+                        "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"],
+                        "application_type": "native"}).encode("utf-8")
+    req = urllib.request.Request(auth["registration_endpoint"], data=body, method="POST",
+                                   headers={"Content-Type": "application/json", "User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        reg = json.loads(r.read().decode("utf-8"))
+    if not reg.get("client_id"):
+        raise RuntimeError("Dynamic client registration didn't return a client_id.")
+    return reg["client_id"]
+
+
+def _oauth_exchange(defn, code, verifier, redirect_uri, client_id=""):
+    """Trade the one-time authorization code for tokens (PKCE, no client secret — this app never
+    ships one). Standard OAuth2 form-encoded token endpoint; returns whatever fields the provider's
+    auth.fields declares (typically access_token/refresh_token), plus the client_id actually used
+    (needed later for a refresh_token exchange with the same client)."""
+    auth = defn.get("auth") or {}
+    data = urllib.parse.urlencode({"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri,
+                                     "client_id": client_id or auth.get("client_id", ""), "code_verifier": verifier}).encode()
+    req = urllib.request.Request(auth["token_url"], data=data, method="POST",
+                                   headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        tok = json.loads(r.read().decode("utf-8"))
+    fields = auth.get("fields") or ["access_token", "refresh_token"]
+    creds = {f: tok.get(f, "") for f in fields if tok.get(f)}
+    if client_id:
+        creds["client_id"] = client_id
+    return creds
+
+
 def load_catalog():
-    """Merge a remote model catalog over the built-in tables, if configured."""
+    """Merge a remote model catalog over the built-in tables, if configured, then always merge
+    the user's own locally-pasted custom providers over that (works even offline / with no
+    catalog_url set, since those never depend on a network fetch)."""
     url = (load_config().get("catalog_url") or MODEL_CATALOG_URL or "").strip()
     CATALOG_STATUS.update(url=url, ok=None, note="")
-    if not url:
-        return
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
-        with urllib.request.urlopen(req, timeout=8) as r:
-            d = json.loads(r.read().decode("utf-8"))
-        for k, v in (d.get("image") or {}).items():
-            if isinstance(v, dict) and v.get("endpoint") and v.get("kind") in ("gpt", "nano"):
-                MODELS[k] = {**MODELS.get(k, {}), **v}
-        n = 0
-        for k, v in (d.get("video") or {}).items():
-            if isinstance(v, dict) and v.get("i2v"):
-                VIDEO_MODELS[k] = {**VIDEO_MODELS.get(k, {}), **v}; n += 1
-        n += sum(1 for v in (d.get("image") or {}).values() if isinstance(v, dict) and v.get("endpoint"))
-        CATALOG_STATUS.update(ok=True, note=f"{n} model entr{'y' if n == 1 else 'ies'} loaded")
-    except Exception as e:
-        CATALOG_STATUS.update(ok=False, note=str(e)[:120])
+    if url:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                d = json.loads(r.read().decode("utf-8"))
+            # A model dispatches to fal via "endpoint"/"i2v", or to an aggregator via "provider" —
+            # either is enough to be usable; "kind" (image) is always required, it drives the UI controls.
+            for k, v in (d.get("image") or {}).items():
+                if isinstance(v, dict) and v.get("kind") in ("gpt", "nano", "gptres") and (v.get("endpoint") or v.get("provider")):
+                    MODELS[k] = {**MODELS.get(k, {}), **v}
+            n = 0
+            for k, v in (d.get("video") or {}).items():
+                if isinstance(v, dict) and (v.get("i2v") or v.get("provider")):
+                    VIDEO_MODELS[k] = {**VIDEO_MODELS.get(k, {}), **v}; n += 1
+            n += sum(1 for v in (d.get("image") or {}).values() if isinstance(v, dict) and v.get("kind") in ("gpt", "nano", "gptres"))
+            _merge_providers(d.get("providers"))
+            CATALOG_STATUS.update(ok=True, note=f"{n} model entr{'y' if n == 1 else 'ies'} loaded")
+        except Exception as e:
+            CATALOG_STATUS.update(ok=False, note=str(e)[:120])
+    _merge_providers(load_config().get("custom_providers"))
 
 
 def check_updates():
@@ -1759,6 +2758,8 @@ def main():
     open_folder(STATE.folder)
 
     port = free_port()
+    global PORT
+    PORT = port
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{port}/"
