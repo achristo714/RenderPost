@@ -95,7 +95,7 @@ MODELS = {
     # automatically via fal's own "auto" (1024x768 in, 1195x896 out — same 4:3 ratio).
     "nano-banana-2-1": {"label": "Nano Banana 2.1 · Google", "endpoint": "google/nano-banana-2.1/edit", "kind": "nano", "recommended": True,
                         "price": 0.04, "mult": {"1K": 1, "2K": 1.48, "4K": 3.35},
-                        "hint": "Google's newest Nano Banana (released Oct 2026) · token-priced, roughly $0.04 at 1K up to $0.13 at 4K for a short prompt · output aspect ratio matches the input automatically"},
+                        "hint": "Google's newest Nano Banana (released Oct 2026) · token-priced, roughly $0.04 at 1K up to $0.13 at 4K for a short prompt · output aspect ratio matches the input automatically · newly released: a content-filter refusal here isn't necessarily about your image — retry, or reword the prompt and re-enhance"},
     "gpt-image-2.5-flare-higgsfield":    {"label": "GPT Image 2.5 Flare · OpenAI", "kind": "gptres", "provider": "higgsfield", "recommended": True,
                         "higgsfield_model": "gpt_image_2_5", "variant": "flare", "price_table": GPT_IMAGE_HIGGSFIELD_EST,
                         "hint": "same OpenAI model as the fal Flare entry · quality and resolution both selectable · runs on your Higgsfield subscription credits instead of a separate fal balance · about $0.008 to $0.50 per image by quality and resolution · connect Higgsfield first"},
@@ -119,7 +119,7 @@ MODELS = {
                         "higgsfield_model": "nano_banana_2_1", "quality": None,
                         "aspect_ratio_opts": ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9", "4:1", "1:4", "8:1", "1:8"],
                         "price": 0.0495, "mult": {"1K": 1, "2K": 1.333, "4K": 2},
-                        "hint": "same Google model as the fal entry · its own \"auto\" aspect-ratio option fails outright on Higgsfield (verified live) — the closest real ratio to your source image is sent instead · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first"},
+                        "hint": "same Google model as the fal entry · its own \"auto\" aspect-ratio option fails outright on Higgsfield (verified live) — the closest real ratio to your source image is sent instead · runs on your Higgsfield subscription credits instead of a separate fal balance · newly released: an unexplained server error here can mean the request was refused — retry, or reword the prompt and re-enhance · connect Higgsfield first"},
     # Nim.video dollar estimates below: its own credit balance has no public $/credit rate exposed
     # through the MCP tools (can't preview a credit-pack purchase headlessly either), so the figure
     # used is $12.50/month for 4000 credits (Nim's own published Pro plan, confirmed live to match
@@ -175,7 +175,7 @@ MODELS = {
                         "nim_model": "1a0da9e6-6f2f-4ccf-b4db-01194db6f171", "nim_model_name": "Nano Banana 2.1",
                         "quality": None, "aspect_ratio_opts": "auto",
                         "price": 0.05, "mult": {"1K": 1, "2K": 1.5, "4K": 2},
-                        "hint": "same Google model as the fal/Higgsfield entries · output aspect ratio matches the input automatically (verified live) · verified live, 16 credits at 1K (about $0.05 on a $12.50/mo Nim Pro plan) · connect Nim.video first"},
+                        "hint": "same Google model as the fal/Higgsfield entries · output aspect ratio matches the input automatically (verified live) · verified live, 16 credits at 1K (about $0.05 on a $12.50/mo Nim Pro plan) · newly released: output can drift from the prompt more than usual right now — review the result and re-enhance with a reworded prompt if needed · connect Nim.video first"},
 }
 RES_OPTIONS = {"1K": "1K (about 1024px)", "2K": "2K (about 2048px)", "4K": "4K (about 4096px)"}
 
@@ -767,14 +767,31 @@ def split_shots(prompt):
     return shots if len(shots) > 1 else [prompt.strip()]
 
 
-def friendly(e):
+def friendly(e, model_id=None):
     m = str(e)
-    if "content_policy_violation" in m or "likenesses of real people" in m:
-        return ("Seedance refused the input images: its content filter flags realistic people. "
-                "Use versions without people (add 'no people' to style notes and re-enhance), "
-                "or keep people small and distant.")
+    if "content_policy_violation" in m or "likenesses of real people" in m or "flagged by a content checker" in m:
+        if model_id and "seedance" in model_id:
+            return ("Seedance refused the input images: its content filter flags realistic people. "
+                    "Use versions without people (add 'no people' to style notes and re-enhance), "
+                    "or keep people small and distant.")
+        # Not Seedance: don't repeat Seedance's specific "realistic people" explanation here, it's
+        # specific to Seedance's own filter and was previously shown for every model by mistake.
+        # Confirmed live on Nano Banana 2.1 that this isn't reliably about image content at all —
+        # the same source image and a similar prompt can pass cleanly right after a refusal.
+        return ("This model's content filter refused the request without saying why. This can happen "
+                "inconsistently, especially on a newly released model — retry the same prompt, or "
+                "reword it and re-enhance if it keeps happening.")
     if "content_policy" in m or "policy_violation" in m:
         return "The model's content filter refused this request. Reword the prompt or use different images."
+    if "Server returned an error response" in m:
+        # Generic fallback text from the mcp package's transport layer (mcp/client/streamable_http.py)
+        # when a provider's MCP endpoint returns a non-2xx HTTP response with no parseable JSON-RPC
+        # error body — the real cause never reaches this app. Confirmed live on Higgsfield with
+        # Nano Banana 2.1: happens on a prompt fal had already content-policy-refused, but Higgsfield
+        # gives no detail either way, so this stays a suggestion, not a diagnosis.
+        return (m + " — the provider's own server failed without giving a reason. This often happens "
+                "with a prompt a content filter elsewhere already refused, or simply a flaky newly "
+                "released model. Retry, or reword the prompt and re-enhance.")
     if len(m) > 400:
         m = m[:400] + " …"
     if "401" in m:
@@ -1766,7 +1783,7 @@ class State:
         except Cancelled:
             self.clip_set(cid, status="ready" if c.get("prompt") else "failed", step="", error=None, _cancel=False)
         except Exception as e:
-            self.clip_set(cid, status="failed", step="", error=friendly(e))
+            self.clip_set(cid, status="failed", step="", error=friendly(e, c.get("vmodel")))
             self.save_clips()
         finally:
             with self.lock:
@@ -1819,7 +1836,7 @@ class State:
                 it.update(status=self._resting_status(it), step="", error=None, _cancel=False)
         except Exception as e:
             with self.lock:
-                it.update(status="done" if it["versions"] else "failed", step="", error=friendly(e))
+                it.update(status="done" if it["versions"] else "failed", step="", error=friendly(e, cfg.get("model")))
         finally:
             with self.lock:
                 self.active -= 1
@@ -1982,7 +1999,7 @@ class State:
                 it.update(status=self._resting_status(it), step="", error=None, _cancel=False)
         except Exception as e:
             with self.lock:
-                it.update(status="failed" if not it["versions"] else "done", step="", error=friendly(e))
+                it.update(status="failed" if not it["versions"] else "done", step="", error=friendly(e, cfg.get("model")))
         finally:
             with self.lock:
                 self.active -= 1

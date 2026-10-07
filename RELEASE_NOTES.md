@@ -7,7 +7,16 @@ recommended model on all three providers:
 - **Nano Banana 2.1 · Google** (Higgsfield-tagged) — via your Higgsfield subscription
 - **Nano Banana 2.1 · Google** (Nim-tagged) — via your Nim.video credits
 
-All three keep the output's aspect ratio matching your source image automatically.
+All three keep the output's aspect ratio matching your source image automatically. Being brand
+new, all three can still be inconsistent — a content-filter refusal or an off-prompt result is
+worth a retry or a reworded prompt; a short note to that effect now shows under the Model
+selector for each.
+
+**Fix:** a content-filter refusal on any model used to say "Seedance refused the input images:
+its content filter flags realistic people" even when the model wasn't Seedance at all — that
+specific explanation is now shown only for an actual Seedance refusal; every other model gets an
+honest, model-agnostic message. Higgsfield's generic "Server returned an error response" (a bare
+transport error with no real detail) now comes with actionable guidance instead of the raw string.
 
 **Fix:** toggling the per-image Character checkbox right before Rewrite/Enhance/Angles could
 occasionally be dropped — the generation could start before the checkbox's own save had landed.
