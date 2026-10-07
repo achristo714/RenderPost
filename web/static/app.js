@@ -418,7 +418,8 @@ function render(){
         ${busyItem ? `<div class="working"><span><i class="dot live"></i>${it.step}<button class="btn quiet cancel" type="button">Cancel</button></span></div>` : ""}
       </div>
       <aside>
-        <div class="row"><h2><label class="selbox" title="Select for Enhance selected"><input type="checkbox" class="selimg" ${selected.has(it.name) ? "checked" : ""}></label>${esc(it.name)}</h2>${tabs}</div>
+        <div class="row"><h2><label class="selbox" title="Select for Enhance selected"><input type="checkbox" class="selimg" ${selected.has(it.name) ? "checked" : ""}></label>${esc(it.name)}</h2></div>
+        ${tabs}
         ${hasChar ? `<div class="row charcard"><label class="showall" style="float:none"><input type="checkbox" class="itemchar" ${it.character_on ? "checked" : ""}> Character</label>
           ${it.character_on ? `<input class="field itemcharnote" placeholder="Character pose, position, or action..." value="${esc(it.character_note || "")}">` : ""}</div>` : ""}
         <div class="facts">
