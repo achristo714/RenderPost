@@ -823,6 +823,21 @@ def with_retry(fn, attempts=3):
             time.sleep(delay); delay *= 2
 
 
+def _live_cfg(cfg, body):
+    """Overlay the page's own live Model/Quality/Resolution/Variations values (when the request
+    carries them) onto the loaded config, instead of trusting whatever's currently saved on disk.
+    The dropdowns save via a 250ms debounced /api/config write (app.js saveConfig()); an action
+    fired right after changing one of them can reach the server before that save lands, silently
+    running against the OLD model/quality/resolution — confirmed live (same race class as the
+    character-checkbox fix: changed the model, fired /api/angles in the same tick, and the
+    resulting version was labeled with the model that was selected before the change)."""
+    live = dict(cfg)
+    for k in ("model", "quality", "resolution", "long_edge", "variations"):
+        if k in body:
+            live[k] = body[k]
+    return live
+
+
 def character_guidance(global_note, card_note):
     """Combine the project-wide character note with a card's own placement/pose text."""
     g, c = (global_note or "").strip(), (card_note or "").strip()
@@ -2551,7 +2566,7 @@ class Handler(BaseHTTPRequestHandler):
                 STATE.set(name, character_on=bool(body.get("character_on")), character_note=str(body.get("character_note") or ""))
             with STATE.lock:
                 it.update(status="queued", step="waiting", error=None, _cancel=False)
-            STATE.pool.submit(STATE._angles_job, name, file, cfg)
+            STATE.pool.submit(STATE._angles_job, name, file, _live_cfg(cfg, body))
             return self._send(200, {"ok": True})
         if path == "/api/video/prompts":
             # Create clip drafts from picks and write a motion prompt for each (or one take prompt).
@@ -2621,6 +2636,7 @@ class Handler(BaseHTTPRequestHandler):
             char = body.get("char") or {}
             auto_revise = bool(body.get("revise_stale"))
             only = set(body.get("names") or [])
+            live = _live_cfg(cfg, body)
             for it in STATE.snapshot():
                 if it["status"] not in ("ready", "failed", "done"):
                     continue
@@ -2634,10 +2650,10 @@ class Handler(BaseHTTPRequestHandler):
                     STATE.set(it["name"], character_on=bool(c.get("character_on")), character_note=str(c.get("character_note") or ""))
                 hand_edited = p != (it["prompt"] or "").strip()
                 if auto_revise and stale(it) and not hand_edited:
-                    STATE.queue(it["name"], "revise_full", None, cfg)   # update prompt, then enhance
+                    STATE.queue(it["name"], "revise_full", None, live)   # update prompt, then enhance
                 else:
                     STATE.set(it["name"], prompt=p)
-                    STATE.queue(it["name"], "enhance", p, cfg)
+                    STATE.queue(it["name"], "enhance", p, live)
             STATE.save_prompts()
             return self._send(200, {"ok": True})
         if path == "/api/regenerate":
@@ -2647,15 +2663,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": "unknown image"})
             if "character_on" in body:
                 STATE.set(name, character_on=bool(body.get("character_on")), character_note=str(body.get("character_note") or ""))
+            live = _live_cfg(cfg, body)
             prompt = (body.get("prompt") or "").strip() or None
             if body.get("rewrite"):
-                STATE.queue(name, "prompt", None, cfg)          # fresh prompt for this image only
+                STATE.queue(name, "prompt", None, live)          # fresh prompt for this image only
             elif prompt:
                 STATE.set(name, prompt=prompt)
                 STATE.save_prompts()
-                STATE.queue(name, "enhance", prompt, cfg)
+                STATE.queue(name, "enhance", prompt, live)
             else:
-                STATE.queue(name, "full", None, cfg)
+                STATE.queue(name, "full", None, live)
             return self._send(200, {"ok": True})
         self._send(404, {"error": "not found"})
 

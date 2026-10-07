@@ -320,6 +320,7 @@ async function enhanceAll(names){
 }
 async function runAll(all){ const r = await api("/api/run", {all: !!all}); if (r.need_key) { openKey(false); $("#keyerr").textContent = r.error; $("#keyerr").hidden = false; return; } if (r.error) toast(r.error); poll(); }
 async function regen(name, rewrite){
+  await saveNow();   // flush any pending Model/Quality/Resolution change first — see enhanceAll()
   const ta = cards[name].querySelector("textarea");
   const body = Object.assign(rewrite ? {name, rewrite:true} : {name, prompt: ta.value}, cardChar(cards[name]));
   const r = await api("/api/regenerate", body);
@@ -458,6 +459,7 @@ function render(){
       const per = imgCost(m);
       const cost = per == null ? " · token priced" : ` · about $${(per * n).toFixed(2)}`;
       if (!await ask(`Make ${n} new angles of ${it.name} ${vlabel(v, sel)} with ${m.label.split(" ·")[0]}${cost}?`, "Angles", "Make angles")) return;
+      await saveNow();   // flush any pending Model/Quality/Resolution change first — see enhanceAll()
       const r = await api("/api/angles", Object.assign({name: it.name, file: v.file}, cardChar(art))); if (r.need_key) { openKey(false); $("#keyerr").textContent = r.error; $("#keyerr").hidden = false; return; } if (r.error) toast(r.error); poll();
     });
     const tv = $(".tovideo", art); if (tv) tv.addEventListener("click", () => {
