@@ -48,7 +48,7 @@ from prompts import (
 )
 
 APP_NAME = "RenderPost"
-APP_VERSION = "1.12.2"
+APP_VERSION = "1.13.0"
 # Optional: where the exe checks for a newer release. Point this at your GitHub repo's
 # latest-release API and the header shows an "Update available" link when a newer tag exists.
 # e.g. "https://api.github.com/repos/YOURNAME/renderpost/releases/latest"   ("" = don't check)
@@ -88,6 +88,14 @@ MODELS = {
     "nano-banana-2":   {"label": "Nano Banana 2 · Google, fast", "endpoint": "fal-ai/nano-banana-2/edit", "kind": "nano", "recommended": True,
                         "price": 0.08, "mult": {"1K": 1, "2K": 1.5, "4K": 2},
                         "hint": "fastest and cheapest, good for quick passes · $0.08 per image, 2K x1.5, 4K x2"},
+    # Released 2026-10-06; verified live via fal's model catalog same day. Token-priced like GPT
+    # Image (price grows with prompt/output size, not a flat per-resolution rate) — the $ figures
+    # here are fal's own published representative costs for a short prompt, same caveat as every
+    # other token-priced entry in this file. Output aspect ratio verified live to match the input
+    # automatically via fal's own "auto" (1024x768 in, 1195x896 out — same 4:3 ratio).
+    "nano-banana-2-1": {"label": "Nano Banana 2.1 · Google", "endpoint": "google/nano-banana-2.1/edit", "kind": "nano", "recommended": True,
+                        "price": 0.04, "mult": {"1K": 1, "2K": 1.48, "4K": 3.35},
+                        "hint": "Google's newest Nano Banana (released Oct 2026) · token-priced, roughly $0.04 at 1K up to $0.13 at 4K for a short prompt · output aspect ratio matches the input automatically · newly released: a content-filter refusal here isn't necessarily about your image — retry, or reword the prompt and re-enhance"},
     "gpt-image-2.5-flare-higgsfield":    {"label": "GPT Image 2.5 Flare · OpenAI", "kind": "gptres", "provider": "higgsfield", "recommended": True,
                         "higgsfield_model": "gpt_image_2_5", "variant": "flare", "price_table": GPT_IMAGE_HIGGSFIELD_EST,
                         "hint": "same OpenAI model as the fal Flare entry · quality and resolution both selectable · runs on your Higgsfield subscription credits instead of a separate fal balance · about $0.008 to $0.50 per image by quality and resolution · connect Higgsfield first"},
@@ -100,21 +108,33 @@ MODELS = {
     "nano-banana-2-higgsfield":   {"label": "Nano Banana 2 · Google, fast", "kind": "nano", "provider": "higgsfield", "recommended": True,
                         "higgsfield_model": "nano_banana_2", "quality": None, "price": 0.0495, "mult": {"1K": 1, "2K": 1.333, "4K": 2},
                         "hint": "same Google model as the fal Nano Banana 2 entry · fastest and cheapest of the pair · runs on your Higgsfield subscription credits instead of a separate fal balance · connect Higgsfield first"},
+    # Released 2026-10-06. "aspect_ratio_opts" here is NOT "auto" despite Higgsfield listing "auto"
+    # as a valid value — verified live that this exact model FAILS outright when sent "auto" (two
+    # separate attempts, with and without the field at all; both failed and were auto-refunded),
+    # while an explicit ratio from its own enum succeeds every time. A real bug on Higgsfield's
+    # side for this specific new model, not a RenderPost guess — the closest real ratio to the
+    # source image is sent instead, via the same snap-to-nearest mechanism Nim's GPT Image family
+    # already uses. 1K/2K/4K pricing (1.5/2/3 credits) confirmed with three real generations.
+    "nano-banana-2-1-higgsfield": {"label": "Nano Banana 2.1 · Google", "kind": "nano", "provider": "higgsfield", "recommended": True,
+                        "higgsfield_model": "nano_banana_2_1", "quality": None,
+                        "aspect_ratio_opts": ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9", "4:1", "1:4", "8:1", "1:8"],
+                        "price": 0.0495, "mult": {"1K": 1, "2K": 1.333, "4K": 2},
+                        "hint": "same Google model as the fal entry · its own \"auto\" aspect-ratio option fails outright on Higgsfield (verified live) — the closest real ratio to your source image is sent instead · runs on your Higgsfield subscription credits instead of a separate fal balance · newly released: an unexplained server error here can mean the request was refused — retry, or reword the prompt and re-enhance · connect Higgsfield first"},
     # Nim.video dollar estimates below: its own credit balance has no public $/credit rate exposed
     # through the MCP tools (can't preview a credit-pack purchase headlessly either), so the figure
     # used is $12.50/month for 4000 credits (Nim's own published Pro plan, confirmed live to match
     # this account's own subscriptionCredits.max of 4000) = $0.003125/credit — verify against your
     # own plan tier before trusting the dollar figure; the credit count itself is exact.
-    # "nim_aspect_ratios": "auto" — verified live that both Nano Banana Edit models accept this and
+    # "aspect_ratio_opts": "auto" — verified live that both Nano Banana Edit models accept this and
     # preserve the source image's own aspect ratio directly; omitting the field entirely (as every
     # Nim image model did before this fix) makes Nim default to a flat 16:9 regardless of input.
     "nano-banana-pro-edit-nim": {"label": "Nano Banana Pro Edit · Google", "kind": "nano", "provider": "nim", "recommended": True,
                         "nim_model": "3c1b1c5b-c1d6-44a8-b986-3068820f4927", "nim_model_name": "Nano Banana Pro Edit",
-                        "quality": None, "nim_aspect_ratios": "auto", "price": 0.078, "mult": {"1K": 1, "2K": 1, "4K": 1},
+                        "quality": None, "aspect_ratio_opts": "auto", "price": 0.078, "mult": {"1K": 1, "2K": 1, "4K": 1},
                         "hint": "same Google model Higgsfield also offers · best at preserving identity/character detail across edits · output aspect ratio matches the input automatically · verified live, 25 credits at 2K (about $0.08 on a $12.50/mo Nim Pro plan) · connect Nim.video first"},
     "nano-banana-2-nim": {"label": "Nano Banana 2 Edit · Google, fast", "kind": "nano", "provider": "nim", "recommended": True,
                         "nim_model": "6a648ab7-a339-40f1-a8b3-586f15512968", "nim_model_name": "Nano Banana 2 Edit",
-                        "quality": None, "nim_aspect_ratios": "auto", "price": 0.0625, "mult": {"1K": 1, "2K": 1, "4K": 1},
+                        "quality": None, "aspect_ratio_opts": "auto", "price": 0.0625, "mult": {"1K": 1, "2K": 1, "4K": 1},
                         "hint": "same Google model Higgsfield also offers · faster, cheaper sibling of Nano Banana Pro Edit · output aspect ratio matches the input automatically · verified live, 20 credits at 2K (about $0.06 on a $12.50/mo Nim Pro plan) · connect Nim.video first"},
     # GPT Image 2.5 Flare/Sunburst · Nim: unlike fal/Higgsfield's single adjustable "quality" param,
     # Nim bills each quality tier as its OWN model id (verified via Nim's own model catalog) — the
@@ -123,25 +143,39 @@ MODELS = {
     # "quality_opts" restricts the dropdown itself to exactly these three real tiers (Nim has no
     # Extra-high/Max tier the way fal does). Low/Medium/High ids verified live via models_explore;
     # Medium's edit() was also run through a real generation end to end.
-    # "nim_aspect_ratios": a real list, not "auto" — verified live that GPT Image 2.5 Flare/Sunburst
+    # "aspect_ratio_opts": a real list, not "auto" — verified live that GPT Image 2.5 Flare/Sunburst
     # have no "auto" option and default to a flat 16:9 when requestedAspectRatio is omitted; the
     # exact computed aspect ratio is used when it's one of these, else the nearest (_nearest_ratio).
-    "gpt-image-2.5-flare-nim": {"label": "GPT Image 2.5 Flare · OpenAI", "kind": "nano", "provider": "nim", "recommended": True,
+    # "kind": "gptres", not "nano" — this model has a real Quality axis (quality_model_ids above),
+    # and "nano" kind's own CSS rule hides the Quality control entirely (fixed; it shipped as "nano"
+    # and the selector was invisible despite being correctly populated — found while adding Nano
+    # Banana 2.1 and checking every model's dropdowns were genuinely visible, not just backend-wired).
+    "gpt-image-2.5-flare-nim": {"label": "GPT Image 2.5 Flare · OpenAI", "kind": "gptres", "provider": "nim", "recommended": True,
                         "nim_model": "01f73222-3ce4-4470-9352-afa375155d1a", "nim_model_name": "GPT Image 2.5 Flare",
                         "quality": None, "quality_opts": {"low": "Low", "medium": "Medium", "high": "High"},
                         "quality_model_ids": {"low": "ca70670d-8ee5-4e96-83c0-ee8546fc56ff", "medium": "01f73222-3ce4-4470-9352-afa375155d1a", "high": "ce71657f-3e7c-4243-879e-1c90eb4c6840"},
                         "quality_model_names": {"low": "GPT Image 2.5 Flare", "medium": "GPT Image 2.5 Flare", "high": "GPT Image 2.5 Flare"},
-                        "nim_aspect_ratios": ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "5:4", "4:5", "2:3"],
+                        "aspect_ratio_opts": ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "5:4", "4:5", "2:3"],
                         "price_table": GPT_IMAGE_NIM_EST, "mult": {"1K": 1, "2K": 1, "4K": 1},
                         "hint": "same OpenAI model as the fal/Higgsfield Flare entries · Nim bills each quality tier as a separate model, so only Low/Medium/High exist here (no Extra high/Max) · output aspect ratio matches the input when it's one of Nim's nine supported ratios, else the closest one · verified live (Medium and Low both run through real generations; the High id is confirmed via Nim's own catalog, not yet run) · Nim adds a small surcharge per megapixel of reference images on top of the base rate, so the real charge varies a little by image size · connect Nim.video first"},
-    "gpt-image-2.5-sunburst-nim": {"label": "GPT Image 2.5 Sunburst · OpenAI", "kind": "nano", "provider": "nim", "recommended": True,
+    "gpt-image-2.5-sunburst-nim": {"label": "GPT Image 2.5 Sunburst · OpenAI", "kind": "gptres", "provider": "nim", "recommended": True,
                         "nim_model": "1f71957b-194c-45ad-a575-82f46c12223c", "nim_model_name": "GPT Image 2.5 Sunburst",
                         "quality": None, "quality_opts": {"low": "Low", "medium": "Medium", "high": "High"},
                         "quality_model_ids": {"low": "2e448cf2-cbda-455e-8cae-36d0aa23ef36", "medium": "1f71957b-194c-45ad-a575-82f46c12223c", "high": "286c0a42-cd0d-4e5d-b2a8-e1f2b76a948c"},
                         "quality_model_names": {"low": "GPT Image 2.5 Sunburst", "medium": "GPT Image 2.5 Sunburst", "high": "GPT Image 2.5 Sunburst"},
-                        "nim_aspect_ratios": ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "5:4", "4:5", "2:3"],
+                        "aspect_ratio_opts": ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "5:4", "4:5", "2:3"],
                         "price_table": GPT_IMAGE_NIM_EST, "mult": {"1K": 1, "2K": 1, "4K": 1},
                         "hint": "same OpenAI model as the fal/Higgsfield Sunburst entries · Nim bills each quality tier as a separate model, so only Low/Medium/High exist here (no Extra high/Max) · output aspect ratio matches the input when it's one of Nim's nine supported ratios, else the closest one · parameters and ids verified via Nim's own model catalog (same family as Flare, not individually re-run — see Flare's own note) · connect Nim.video first"},
+    # Released 2026-10-06; verified live the same day. "auto" genuinely works here (unlike the same
+    # model on Higgsfield, verified live via a real generation: 1024x768 in, 1195x896 out, same
+    # 4:3 ratio) — confirms this is a per-provider quirk, not something true of "Nano Banana 2.1"
+    # as a model in general. 1K/2K/4K pricing (16/24/32 credits) confirmed via Nim's own free
+    # cost-preflight (models_explore with an explicit resolution — no generation needed to check).
+    "nano-banana-2-1-nim": {"label": "Nano Banana 2.1 · Google", "kind": "nano", "provider": "nim", "recommended": True,
+                        "nim_model": "1a0da9e6-6f2f-4ccf-b4db-01194db6f171", "nim_model_name": "Nano Banana 2.1",
+                        "quality": None, "aspect_ratio_opts": "auto",
+                        "price": 0.05, "mult": {"1K": 1, "2K": 1.5, "4K": 2},
+                        "hint": "same Google model as the fal/Higgsfield entries · output aspect ratio matches the input automatically (verified live) · verified live, 16 credits at 1K (about $0.05 on a $12.50/mo Nim Pro plan) · newly released: output can drift from the prompt more than usual right now — review the result and re-enhance with a reworded prompt if needed · connect Nim.video first"},
 }
 RES_OPTIONS = {"1K": "1K (about 1024px)", "2K": "2K (about 2048px)", "4K": "4K (about 4096px)"}
 
@@ -353,7 +387,7 @@ PROVIDERS = {"higgsfield": {
              "output_as": "character_media_url", "output_field": "file_url"},
             {"tool": "generate_image", "arguments": {
                 "model_id": "{nim_model}", "model_name": "{nim_model_name}", "prompt": "{prompt}",
-                "resolution": "{resolution_upper}", "requestedAspectRatio": "{aspect_ratio_nim}",
+                "resolution": "{resolution_upper}", "requestedAspectRatio": "{aspect_ratio}",
                 # Nim's own "fileInputs" is a flat array of plain URL strings, not Higgsfield's
                 # role-tagged {value, role} objects — "_scalar" fills each item as a bare string
                 # instead of a dict (see _fill_template's docstring).
@@ -733,14 +767,34 @@ def split_shots(prompt):
     return shots if len(shots) > 1 else [prompt.strip()]
 
 
-def friendly(e):
+def friendly(e, model_id=None):
     m = str(e)
-    if "content_policy_violation" in m or "likenesses of real people" in m:
-        return ("Seedance refused the input images: its content filter flags realistic people. "
-                "Use versions without people (add 'no people' to style notes and re-enhance), "
-                "or keep people small and distant.")
+    if "content_policy_violation" in m or "likenesses of real people" in m or "flagged by a content checker" in m:
+        if model_id and "seedance" in model_id:
+            return ("Seedance refused the input images: its content filter flags realistic people. "
+                    "Use versions without people (add 'no people' to style notes and re-enhance), "
+                    "or keep people small and distant.")
+        # Not Seedance: don't repeat Seedance's specific "realistic people" explanation here, it's
+        # specific to Seedance's own filter and was previously shown for every model by mistake.
+        # Confirmed live on Nano Banana 2.1 that this isn't reliably about image content at all —
+        # the same source image and a similar prompt can pass cleanly right after a refusal.
+        return ("This model's content filter refused the request without saying why. This can happen "
+                "inconsistently, especially on a newly released model — retry the same prompt, or "
+                "reword it and re-enhance if it keeps happening.")
     if "content_policy" in m or "policy_violation" in m:
         return "The model's content filter refused this request. Reword the prompt or use different images."
+    if "Server returned an error response" in m:
+        # Generic fallback text from the mcp package's transport layer (mcp/client/streamable_http.py)
+        # when a provider's MCP endpoint returns a non-2xx HTTP response with no parseable JSON-RPC
+        # error body — the real cause never reaches this app. Confirmed live on two different causes
+        # behind this exact same message: a fal-refused prompt also failing on Higgsfield with no
+        # detail, and (separately) a genuinely expired Higgsfield access token (a real 401, masked by
+        # this same generic text) — AggregatorProvider._call_mcp now retries once via a silent token
+        # refresh before this message is ever shown, so by the time a caller sees this, that refresh
+        # either wasn't applicable or didn't fix it.
+        return (m + " — the provider's own server failed without giving a reason. Try reconnecting "
+                "this provider in Connect providers (a quiet fix attempt already happens automatically "
+                "and failed), retry, or reword the prompt and re-enhance.")
     if len(m) > 400:
         m = m[:400] + " …"
     if "401" in m:
@@ -767,6 +821,21 @@ def with_retry(fn, attempts=3):
             if i == attempts - 1 or "401" in str(e) or "402" in str(e):
                 raise
             time.sleep(delay); delay *= 2
+
+
+def _live_cfg(cfg, body):
+    """Overlay the page's own live Model/Quality/Resolution/Variations values (when the request
+    carries them) onto the loaded config, instead of trusting whatever's currently saved on disk.
+    The dropdowns save via a 250ms debounced /api/config write (app.js saveConfig()); an action
+    fired right after changing one of them can reach the server before that save lands, silently
+    running against the OLD model/quality/resolution — confirmed live (same race class as the
+    character-checkbox fix: changed the model, fired /api/angles in the same tick, and the
+    resulting version was labeled with the model that was selected before the change)."""
+    live = dict(cfg)
+    for k in ("model", "quality", "resolution", "long_edge", "variations"):
+        if k in body:
+            live[k] = body[k]
+    return live
 
 
 def character_guidance(global_note, card_note):
@@ -1295,8 +1364,15 @@ class AggregatorProvider:
                                          "client_id": self.creds.get("client_id") or auth.get("client_id", "")}).encode()
         req = urllib.request.Request(auth["token_url"], data=data, method="POST",
                                        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": f"{APP_NAME}/{APP_VERSION}"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            tok = json.loads(r.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                tok = json.loads(r.read().decode("utf-8"))
+        except Exception:
+            # A dead or already-rotated refresh_token (many providers' refresh tokens are single-use)
+            # fails here as a plain transport error (e.g. a 400 from the token endpoint) — this is a
+            # failed recovery ATTEMPT, not a new problem to report. Swallow it and return False so the
+            # caller falls through to its own original, more informative error instead of this one.
+            return False
         if not tok.get("access_token"):
             return False
         self.creds["access_token"] = tok["access_token"]
@@ -1361,7 +1437,19 @@ class AggregatorProvider:
                 code, data = getattr(cause, "code", None), getattr(cause, "data", None)
                 print(f"{self.label()} MCP call failed ({type(cause).__name__}): {msg} | code={code!r} data={data!r}", flush=True)
                 traceback.print_exc()
-                if ("401" in msg or "unauthorized" in msg.lower()) and not _retried and self._refresh_oauth():
+                # "Server returned an error response" is the mcp package's own generic fallback
+                # (mcp/client/streamable_http.py) for ANY non-2xx HTTP response whose body isn't a
+                # parseable JSON-RPC error — it discards the real status code before this app ever
+                # sees it. Confirmed live against Higgsfield with a genuinely expired access token:
+                # the real response was a plain 401 ({"error":"Unauthorized"}), but by the time it
+                # reaches here it's indistinguishable from any other server-side failure, so the
+                # "401" substring check below never matches and a real, recoverable expired token
+                # was previously left unrefreshed. Treating this opaque fallback as a possible auth
+                # failure too is safe even when it isn't: _refresh_oauth() itself only proceeds for
+                # an oauth2 provider with a stored refresh_token, and a failed/unneeded refresh just
+                # falls through to the normal retry below.
+                if (("401" in msg or "unauthorized" in msg.lower() or "Server returned an error response" in msg)
+                        and not _retried and self._refresh_oauth()):
                     return self._call_mcp(op_def, args, cancelled, _retried=True)
                 if i == attempts - 1:
                     raise RuntimeError(f"{self.label()}: {msg}") from e
@@ -1426,18 +1514,25 @@ class AggregatorProvider:
         if qmap and cfg.get("quality") in qmap:
             args["nim_model"] = qmap[cfg["quality"]]
             args["nim_model_name"] = (extra.get("quality_model_names") or {}).get(cfg["quality"], args.get("nim_model_name"))
-        # Nim's own aspect ratio is a closed enum per model, not an arbitrary fraction the way
-        # Higgsfield's API accepts — verified live: GPT Image 2.5 Flare/Sunburst default to a flat
-        # 16:9 whenever this field is simply omitted, regardless of the source image's own aspect.
-        # "nim_aspect_ratios" is either the literal string "auto" (some Consistency/Edit models —
-        # verified live for Nano Banana Pro Edit/2 — accept this and preserve the input's own aspect
-        # directly, no computation needed) or that model's allowed list, in which case the exact
-        # computed "aspect_ratio" is used when it's already one of them, else the nearest one.
-        ratios = extra.get("nim_aspect_ratios")
+        # Some providers' aspect ratio is a closed enum per model, not an arbitrary fraction the way
+        # Higgsfield's shared template generally accepts — verified live: Nim's GPT Image 2.5 Flare/
+        # Sunburst default to a flat 16:9 whenever this field is simply omitted; Higgsfield's own
+        # Nano Banana 2.1 outright FAILS when sent "auto" specifically (a real bug on their side,
+        # confirmed by retrying the identical request with an explicit ratio, which succeeds) despite
+        # "auto" being listed in its own aspect_ratios. "aspect_ratio_opts" is either the literal
+        # string "auto" (some Consistency/Edit models genuinely honor this and preserve the input's
+        # own aspect directly — verified live per-model, never assumed from another model's behavior)
+        # or that model's allowed list, in which case the exact computed "aspect_ratio" is used when
+        # it's already one of them, else the nearest one. This overwrites "aspect_ratio" itself
+        # (not a separate template var) so any provider's existing template — including Higgsfield's
+        # shared one, already referencing "{aspect_ratio}" for every other model — picks it up with
+        # no template change; a model that doesn't declare this keeps getting the raw computed value
+        # exactly as before.
+        ratios = extra.get("aspect_ratio_opts")
         if ratios == "auto":
-            args["aspect_ratio_nim"] = "auto"
+            args["aspect_ratio"] = "auto"
         elif ratios:
-            args["aspect_ratio_nim"] = args["aspect_ratio"] if args["aspect_ratio"] in ratios else _nearest_ratio(w, h, ratios)
+            args["aspect_ratio"] = args["aspect_ratio"] if args["aspect_ratio"] in ratios else _nearest_ratio(w, h, ratios)
         return [self._call("image", args, cancelled)]
 
     def video(self, prompt, image_urls, cfg, take, cancelled=lambda: False, extra_urls=()):
@@ -1725,7 +1820,7 @@ class State:
         except Cancelled:
             self.clip_set(cid, status="ready" if c.get("prompt") else "failed", step="", error=None, _cancel=False)
         except Exception as e:
-            self.clip_set(cid, status="failed", step="", error=friendly(e))
+            self.clip_set(cid, status="failed", step="", error=friendly(e, c.get("vmodel")))
             self.save_clips()
         finally:
             with self.lock:
@@ -1778,7 +1873,7 @@ class State:
                 it.update(status=self._resting_status(it), step="", error=None, _cancel=False)
         except Exception as e:
             with self.lock:
-                it.update(status="done" if it["versions"] else "failed", step="", error=friendly(e))
+                it.update(status="done" if it["versions"] else "failed", step="", error=friendly(e, cfg.get("model")))
         finally:
             with self.lock:
                 self.active -= 1
@@ -1941,7 +2036,7 @@ class State:
                 it.update(status=self._resting_status(it), step="", error=None, _cancel=False)
         except Exception as e:
             with self.lock:
-                it.update(status="failed" if not it["versions"] else "done", step="", error=friendly(e))
+                it.update(status="failed" if not it["versions"] else "done", step="", error=friendly(e, cfg.get("model")))
         finally:
             with self.lock:
                 self.active -= 1
@@ -2467,9 +2562,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": "unknown version"})
             if it["status"] in ("queued", "working"):
                 return self._send(400, {"error": "That image is busy."})
+            if "character_on" in body:
+                STATE.set(name, character_on=bool(body.get("character_on")), character_note=str(body.get("character_note") or ""))
             with STATE.lock:
                 it.update(status="queued", step="waiting", error=None, _cancel=False)
-            STATE.pool.submit(STATE._angles_job, name, file, cfg)
+            STATE.pool.submit(STATE._angles_job, name, file, _live_cfg(cfg, body))
             return self._send(200, {"ok": True})
         if path == "/api/video/prompts":
             # Create clip drafts from picks and write a motion prompt for each (or one take prompt).
@@ -2536,8 +2633,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/enhance_all":
             # Stage 2: send every reviewed prompt. Prompts arrive from the page so edits count.
             prompts = body.get("prompts") or {}
+            char = body.get("char") or {}
             auto_revise = bool(body.get("revise_stale"))
             only = set(body.get("names") or [])
+            live = _live_cfg(cfg, body)
             for it in STATE.snapshot():
                 if it["status"] not in ("ready", "failed", "done"):
                     continue
@@ -2546,12 +2645,15 @@ class Handler(BaseHTTPRequestHandler):
                 p = (prompts.get(it["name"]) or it["prompt"] or "").strip()
                 if not p:
                     continue
+                c = char.get(it["name"])
+                if c:
+                    STATE.set(it["name"], character_on=bool(c.get("character_on")), character_note=str(c.get("character_note") or ""))
                 hand_edited = p != (it["prompt"] or "").strip()
                 if auto_revise and stale(it) and not hand_edited:
-                    STATE.queue(it["name"], "revise_full", None, cfg)   # update prompt, then enhance
+                    STATE.queue(it["name"], "revise_full", None, live)   # update prompt, then enhance
                 else:
                     STATE.set(it["name"], prompt=p)
-                    STATE.queue(it["name"], "enhance", p, cfg)
+                    STATE.queue(it["name"], "enhance", p, live)
             STATE.save_prompts()
             return self._send(200, {"ok": True})
         if path == "/api/regenerate":
@@ -2559,15 +2661,18 @@ class Handler(BaseHTTPRequestHandler):
             name = body.get("name")
             if name not in STATE.items:
                 return self._send(404, {"error": "unknown image"})
+            if "character_on" in body:
+                STATE.set(name, character_on=bool(body.get("character_on")), character_note=str(body.get("character_note") or ""))
+            live = _live_cfg(cfg, body)
             prompt = (body.get("prompt") or "").strip() or None
             if body.get("rewrite"):
-                STATE.queue(name, "prompt", None, cfg)          # fresh prompt for this image only
+                STATE.queue(name, "prompt", None, live)          # fresh prompt for this image only
             elif prompt:
                 STATE.set(name, prompt=prompt)
                 STATE.save_prompts()
-                STATE.queue(name, "enhance", prompt, cfg)
+                STATE.queue(name, "enhance", prompt, live)
             else:
-                STATE.queue(name, "full", None, cfg)
+                STATE.queue(name, "full", None, live)
             return self._send(200, {"ok": True})
         self._send(404, {"error": "not found"})
 

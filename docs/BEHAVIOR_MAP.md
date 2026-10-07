@@ -1,6 +1,6 @@
 # Render Post — Behavior Map
 
-> Last verified against: v1.12.2
+> Last verified against: v1.13.0
 
 This is a map of how Render Post actually behaves: what happens when you click something, where
 that gets saved, and what logic decides the result. It is **not** a user guide (that's
@@ -695,16 +695,15 @@ typing in a prompt box while other cards elsewhere on the page update live in th
 A running list of behavior quirks that are understood but not yet fixed. Add to this list rather
 than letting a known oddity go unrecorded — a one-line entry here is enough.
 
-- **Character checkbox vs. Rewrite/Enhance race condition** (open, diagnosed 2026-09-13). Turning
-  on a per-image character checkbox saves via its own request (`/api/item_config`), completely
-  separate from the Rewrite/Enhance request. If both are clicked in quick succession — the
-  natural way to use the feature — the enhance job can start and read the character flag before
-  the checkbox's own save has finished, silently generating without the character. Confirmed by
-  deliberately racing the two requests: character was dropped roughly 1 in 5 tries. Proposed fix:
-  have the Rewrite/Enhance/Angles request carry the current checkbox state itself (read live from
-  the page at click time) instead of depending on a separate request having already landed; this
-  should also be applied to the batch "Enhance all" path, which has the same exposure. Not yet
-  implemented.
+- **Character checkbox vs. Rewrite/Enhance race condition** (fixed, v1.13.0; diagnosed
+  2026-09-13). Turning on a per-image character checkbox used to save via its own request
+  (`/api/item_config`), completely separate from the Rewrite/Enhance request; if both were
+  clicked in quick succession the enhance job could start and read the character flag before the
+  checkbox's own save had landed, silently generating without the character (confirmed dropped
+  roughly 1 in 5 tries). Fixed by having `/api/regenerate`, `/api/angles` and `/api/enhance_all`
+  all carry the checkbox's live state (read from the page at click/submit time) directly in the
+  same request, so the job that reads it never depends on a separate request's timing.
+  `/api/item_config` still exists and still persists the checkbox for its own sake.
 - **Saved phrases are intentionally minimal** (by design, v1.9.0). No editing a saved phrase in
   place (delete and re-add instead), no reordering, no per-project phrase libraries (phrases are
   global across every folder, unlike style/motion notes), and no dedupe check — saving the same
