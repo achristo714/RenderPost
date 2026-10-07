@@ -1,8 +1,21 @@
-## Render Post v1.12.2
+## Render Post v1.13.0
 
-Fixed a build issue that broke the automated exe build (and would have broken a local
-`build.bat` build too): PyInstaller's bundling step for the `mcp` package tried to import a part
-of it RenderPost never uses (its command-line tool), which needed a package that wasn't installed.
-No app behavior changes — this release exists only to get a working exe out again.
+**Nano Banana 2.1** (Google's newest model, released this week) is now available as a
+recommended model on all three providers:
 
-Nothing else changed since 1.12.1.
+- **Nano Banana 2.1 · Google** — direct via fal
+- **Nano Banana 2.1 · Google** (Higgsfield-tagged) — via your Higgsfield subscription
+- **Nano Banana 2.1 · Google** (Nim-tagged) — via your Nim.video credits
+
+All three keep the output's aspect ratio matching your source image automatically.
+
+**Fix:** toggling the per-image Character checkbox right before Rewrite/Enhance/Angles could
+occasionally be dropped — the generation could start before the checkbox's own save had landed.
+That race is gone; the checkbox state now travels with the same request.
+
+**New:** a scroll-to-top button for long image grids, and a lightbox for the character reference
+thumbnail — click it to view the reference image full-size, or click the empty placeholder to
+jump straight to the upload dialog.
+
+Also fixed: GPT Image 2.5 Flare/Sunburst via Nim.video had a working Quality setting that never
+actually showed up in the dropdown — it's visible now.

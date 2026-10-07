@@ -86,8 +86,11 @@
   .setup .controls .hint{font-size:11px;color:var(--em-ink-faint);line-height:1.4}
   body:not(.more) .charblock,body:not(.more) .f.more{display:none !important}
   .charblock{display:grid;grid-template-columns:96px 1fr;gap:12px;align-items:start;padding:10px;border:1px solid var(--em-line);border-radius:var(--em-r-md);background:var(--em-bg-inset)}
-  .charthumb{width:96px;aspect-ratio:3/4;border-radius:var(--em-r-sm);background:var(--em-bg-2);border:1px solid var(--em-line);display:grid;place-items:center;overflow:hidden;text-align:center;padding:4px}
+  .charthumb{width:96px;aspect-ratio:3/4;border-radius:var(--em-r-sm);background:var(--em-bg-2);border:1px solid var(--em-line);display:grid;place-items:center;overflow:hidden;text-align:center;padding:4px;cursor:pointer;transition:border-color var(--em-t-fast)}
+  .charthumb:hover{border-color:var(--em-line-bright)}
   .charthumb img{width:100%;height:100%;object-fit:cover}
+  .lightbox{cursor:zoom-out;padding:24px}
+  .lightbox img{max-width:90vw;max-height:90vh;border-radius:var(--em-r-lg);box-shadow:var(--em-shadow-modal);cursor:default}
   .charbody{display:grid;gap:8px;min-width:0}
   .charbody .hint{font-size:11px;color:var(--em-ink-faint);line-height:1.4}
   .charrow{display:flex;gap:8px;align-items:center} .charrow .field{flex:1}
@@ -236,4 +239,10 @@
   .hints{position:fixed;left:14px;bottom:12px;display:flex;gap:14px;font-family:var(--em-font-mono);font-size:10px;color:var(--em-ink-faint);pointer-events:none}
   .hints b{color:var(--em-ink-dim);font-weight:500;margin-right:4px}
   .hints{transition:opacity .3s} body.scrolled .hints{opacity:0}
+  .scrolltop{position:fixed;right:14px;bottom:64px;z-index:29;width:32px;height:32px;padding:0;justify-content:center;border-radius:50%;
+    background:var(--em-panel);backdrop-filter:var(--em-blur);border:1px solid var(--em-line-strong);box-shadow:var(--em-shadow-panel);
+    opacity:0;pointer-events:none;transform:translateY(4px);transition:opacity var(--em-t-fast) var(--em-ease),transform var(--em-t-fast) var(--em-ease),background var(--em-t-fast),border-color var(--em-t-fast)}
+  body.scrolled .scrolltop{opacity:1;pointer-events:auto;transform:translateY(0)}
+  .scrolltop:hover{background:var(--em-hover);border-color:var(--em-line-bright)}
+  @media (prefers-reduced-motion:reduce){.scrolltop{transition:opacity .01ms}}
   @media (prefers-reduced-motion:reduce){article,.setup,.modal{animation:none}.dot.live{animation:none}}

@@ -125,6 +125,14 @@ async function boot(){
   $("#charfile").addEventListener("change", () => { const f = $("#charfile").files[0]; if (!f) return; const rd = new FileReader(); rd.onload = async () => { const r = await api("/api/character/upload", {data: rd.result}); if (r.error) { toast(r.error); return; } await poll(); renderChar(); }; rd.readAsDataURL(f); $("#charfile").value = ""; });
   $("#charclear").addEventListener("click", async () => { if (!await ask("Remove the character from this project?", "Remove character", "Remove")) return; await api("/api/character/clear", {}); await poll(); renderChar(); });
   $("#charwarnok").addEventListener("click", () => { if ($("#charwarndismiss").checked) sessionStorage.setItem("rp_charwarn_dismissed", "1"); $("#charwarnmodal").hidden = true; });
+  // Click the thumbnail: a defined character opens it full-size in a lightbox; the empty "No
+  // character" placeholder instead acts as the Upload button, so there's one obvious click target
+  // either way rather than a thumbnail that does nothing until a character exists.
+  $("#charthumb").addEventListener("click", () => {
+    if (S.character && S.character.file) { $("#charlightbox img").src = `/img/out/${S.character.file}`; $("#charlightbox").hidden = false; }
+    else $("#charfile").click();
+  });
+  $("#charlightbox").addEventListener("click", () => { $("#charlightbox").hidden = true; });
   renderChar();
   $("#foldercancel").addEventListener("click", () => $("#foldermodal").hidden = true);
   $("#folderbrowse").addEventListener("click", async () => { const r = await api("/api/folder", {browse: true}); if (r.error) { toast(r.error); return; } $("#foldermodal").hidden = true; waitForFolder(); });
@@ -150,6 +158,7 @@ async function boot(){
   $("#keysave").addEventListener("click", saveKey);
   $("#keycancel").addEventListener("click", () => $("#keymodal").hidden = true);
   $("#stop").addEventListener("click", async () => { await api("/api/cancel", {}); poll(); });
+  $("#scrolltop").addEventListener("click", () => window.scrollTo({top: 0, behavior: "smooth"}));
   $("#quit").addEventListener("click", async () => { if (S.active) { if (!await ask("Jobs are still running. Quit anyway?", "Quit", "Quit")) return; } await api("/api/quit", {}); document.body.innerHTML = '<div class="empty"><span class="label">Render Post stopped</span><span>You can close this tab.</span></div>'; });
   $("#keyinput").addEventListener("keydown", e => { if (e.key === "Enter") saveKey(); });
   if (!S.has_key) openKey(false);
@@ -207,7 +216,7 @@ async function deletePhrase(id){
   phrases = r.phrases || phrases;
   openPhraseModal();
 }
-document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#phrasemodal").hidden) $("#phrasemodal").hidden = true; if (e.key === "Escape" && !$("#providersmodal").hidden) $("#providersmodal").hidden = true; });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#phrasemodal").hidden) $("#phrasemodal").hidden = true; if (e.key === "Escape" && !$("#providersmodal").hidden) $("#providersmodal").hidden = true; if (e.key === "Escape" && !$("#charlightbox").hidden) $("#charlightbox").hidden = true; });
 
 function renderProviders(){
   const list = $("#providerlist");
@@ -289,17 +298,31 @@ async function saveKey(){
   if (S.items.some(i => i.status === "pending") && $("#review").value !== "1") runAll(false);
 }
 async function reviseAll(){ await saveNow(); const r = await api("/api/revise", {}); if (r.need_key) { openKey(false); $("#keyerr").textContent = r.error; $("#keyerr").hidden = false; return; } if (r.error) toast(r.error); poll(); }
+function cardChar(el){
+  // Read the character checkbox/note live from the DOM so a Rewrite/Enhance/Angles request always
+  // carries the current state itself, instead of racing the checkbox's own separate save request
+  // (POST /api/item_config) to land first — both can be in flight at once.
+  const cc = el && el.querySelector(".itemchar");
+  if (!cc) return null;
+  const note = el.querySelector(".itemcharnote");
+  return {character_on: cc.checked, character_note: note ? note.value : ""};
+}
 async function enhanceAll(names){
   await saveNow();
-  const prompts = {}; for (const [n, el] of Object.entries(cards)) { const ta = el.querySelector("textarea"); if (ta) prompts[n] = ta.value; }
-  const r = await api("/api/enhance_all", {prompts, names: names || null, revise_stale: $("#review").value !== "1"});
+  const prompts = {}, char = {};
+  for (const [n, el] of Object.entries(cards)) {
+    const ta = el.querySelector("textarea"); if (ta) prompts[n] = ta.value;
+    const c = cardChar(el); if (c) char[n] = c;
+  }
+  const r = await api("/api/enhance_all", {prompts, char, names: names || null, revise_stale: $("#review").value !== "1"});
   if (r.need_key) { openKey(false); $("#keyerr").textContent = r.error; $("#keyerr").hidden = false; return; }
   if (r.error) toast(r.error); poll();
 }
 async function runAll(all){ const r = await api("/api/run", {all: !!all}); if (r.need_key) { openKey(false); $("#keyerr").textContent = r.error; $("#keyerr").hidden = false; return; } if (r.error) toast(r.error); poll(); }
 async function regen(name, rewrite){
   const ta = cards[name].querySelector("textarea");
-  const r = await api("/api/regenerate", rewrite ? {name, rewrite:true} : {name, prompt: ta.value});
+  const body = Object.assign(rewrite ? {name, rewrite:true} : {name, prompt: ta.value}, cardChar(cards[name]));
+  const r = await api("/api/regenerate", body);
   if (r.need_key) { openKey(false); $("#keyerr").textContent = r.error; $("#keyerr").hidden = false; return; }
   if (r.error) toast(r.error); poll();
 }
@@ -434,7 +457,7 @@ function render(){
       const per = imgCost(m);
       const cost = per == null ? " · token priced" : ` · about $${(per * n).toFixed(2)}`;
       if (!await ask(`Make ${n} new angles of ${it.name} ${vlabel(v, sel)} with ${m.label.split(" ·")[0]}${cost}?`, "Angles", "Make angles")) return;
-      const r = await api("/api/angles", {name: it.name, file: v.file}); if (r.need_key) { openKey(false); $("#keyerr").textContent = r.error; $("#keyerr").hidden = false; return; } if (r.error) toast(r.error); poll();
+      const r = await api("/api/angles", Object.assign({name: it.name, file: v.file}, cardChar(art))); if (r.need_key) { openKey(false); $("#keyerr").textContent = r.error; $("#keyerr").hidden = false; return; } if (r.error) toast(r.error); poll();
     });
     const tv = $(".tovideo", art); if (tv) tv.addEventListener("click", () => {
       const k = it.name + "|" + v.file; if (!frames.some(f => frameKey(f) === k)) { frames.push({name: it.name, file: v.file}); saveConfig(); }
