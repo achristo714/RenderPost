@@ -786,12 +786,15 @@ def friendly(e, model_id=None):
     if "Server returned an error response" in m:
         # Generic fallback text from the mcp package's transport layer (mcp/client/streamable_http.py)
         # when a provider's MCP endpoint returns a non-2xx HTTP response with no parseable JSON-RPC
-        # error body — the real cause never reaches this app. Confirmed live on Higgsfield with
-        # Nano Banana 2.1: happens on a prompt fal had already content-policy-refused, but Higgsfield
-        # gives no detail either way, so this stays a suggestion, not a diagnosis.
-        return (m + " — the provider's own server failed without giving a reason. This often happens "
-                "with a prompt a content filter elsewhere already refused, or simply a flaky newly "
-                "released model. Retry, or reword the prompt and re-enhance.")
+        # error body — the real cause never reaches this app. Confirmed live on two different causes
+        # behind this exact same message: a fal-refused prompt also failing on Higgsfield with no
+        # detail, and (separately) a genuinely expired Higgsfield access token (a real 401, masked by
+        # this same generic text) — AggregatorProvider._call_mcp now retries once via a silent token
+        # refresh before this message is ever shown, so by the time a caller sees this, that refresh
+        # either wasn't applicable or didn't fix it.
+        return (m + " — the provider's own server failed without giving a reason. Try reconnecting "
+                "this provider in Connect providers (a quiet fix attempt already happens automatically "
+                "and failed), retry, or reword the prompt and re-enhance.")
     if len(m) > 400:
         m = m[:400] + " …"
     if "401" in m:
@@ -1346,8 +1349,15 @@ class AggregatorProvider:
                                          "client_id": self.creds.get("client_id") or auth.get("client_id", "")}).encode()
         req = urllib.request.Request(auth["token_url"], data=data, method="POST",
                                        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": f"{APP_NAME}/{APP_VERSION}"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            tok = json.loads(r.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                tok = json.loads(r.read().decode("utf-8"))
+        except Exception:
+            # A dead or already-rotated refresh_token (many providers' refresh tokens are single-use)
+            # fails here as a plain transport error (e.g. a 400 from the token endpoint) — this is a
+            # failed recovery ATTEMPT, not a new problem to report. Swallow it and return False so the
+            # caller falls through to its own original, more informative error instead of this one.
+            return False
         if not tok.get("access_token"):
             return False
         self.creds["access_token"] = tok["access_token"]
@@ -1412,7 +1422,19 @@ class AggregatorProvider:
                 code, data = getattr(cause, "code", None), getattr(cause, "data", None)
                 print(f"{self.label()} MCP call failed ({type(cause).__name__}): {msg} | code={code!r} data={data!r}", flush=True)
                 traceback.print_exc()
-                if ("401" in msg or "unauthorized" in msg.lower()) and not _retried and self._refresh_oauth():
+                # "Server returned an error response" is the mcp package's own generic fallback
+                # (mcp/client/streamable_http.py) for ANY non-2xx HTTP response whose body isn't a
+                # parseable JSON-RPC error — it discards the real status code before this app ever
+                # sees it. Confirmed live against Higgsfield with a genuinely expired access token:
+                # the real response was a plain 401 ({"error":"Unauthorized"}), but by the time it
+                # reaches here it's indistinguishable from any other server-side failure, so the
+                # "401" substring check below never matches and a real, recoverable expired token
+                # was previously left unrefreshed. Treating this opaque fallback as a possible auth
+                # failure too is safe even when it isn't: _refresh_oauth() itself only proceeds for
+                # an oauth2 provider with a stored refresh_token, and a failed/unneeded refresh just
+                # falls through to the normal retry below.
+                if (("401" in msg or "unauthorized" in msg.lower() or "Server returned an error response" in msg)
+                        and not _retried and self._refresh_oauth()):
                     return self._call_mcp(op_def, args, cancelled, _retried=True)
                 if i == attempts - 1:
                     raise RuntimeError(f"{self.label()}: {msg}") from e
