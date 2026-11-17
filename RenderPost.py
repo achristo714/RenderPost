@@ -48,7 +48,7 @@ from prompts import (
 )
 
 APP_NAME = "RenderPost"
-APP_VERSION = "1.13.0"
+APP_VERSION = "1.13.1"
 # Optional: where the exe checks for a newer release. Point this at your GitHub repo's
 # latest-release API and the header shows an "Update available" link when a newer tag exists.
 # e.g. "https://api.github.com/repos/YOURNAME/renderpost/releases/latest"   ("" = don't check)
@@ -807,7 +807,28 @@ def friendly(e, model_id=None):
         return "fal refused this request (403). The model may need to be enabled on your account."
     if "timed out" in m.lower() or "timeout" in m.lower():
         return "The request timed out. Retry; large images can take a few minutes."
+    if "CERTIFICATE_VERIFY_FAILED" in m:
+        return ("This PC couldn't verify the download server's security certificate. If you use a VPN, "
+                "antivirus web shield or work network that inspects HTTPS, try without it, then retry.")
     return m
+
+
+def install_https_trust():
+    """Make every urllib request trust certifi's CA bundle as well as the system store.
+    fal_client (via httpx) already verifies against certifi, so fal API calls always worked,
+    but plain urllib.urlopen() on Windows trusts only the Windows root store. Windows fetches
+    missing roots on demand only for its own crypto API (browsers), never for Python, so on a
+    PC that hasn't seen a CDN's root yet the fal result download failed with
+    CERTIFICATE_VERIFY_FAILED right after a paid enhancement succeeded. Keeping the system
+    store too means corporate or antivirus roots installed in Windows still work."""
+    import ssl
+    ctx = ssl.create_default_context()
+    try:
+        import certifi
+        ctx.load_verify_locations(cafile=certifi.where())
+    except Exception as e:
+        print(f"certifi not loaded, using the system store only: {e}")
+    urllib.request.install_opener(urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx)))
 
 
 def with_retry(fn, attempts=3):
@@ -1042,8 +1063,13 @@ class Fal:
 
     @staticmethod
     def download(url, out_path):
-        with urllib.request.urlopen(url, timeout=300) as resp:
-            out_path.write_bytes(resp.read())
+        # The result is already paid for by the time this runs, so a dropped connection retries
+        # instead of throwing the image away. Same User-Agent as every other outbound request.
+        def fetch():
+            req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                out_path.write_bytes(resp.read())
+        with_retry(fetch)
 
 
 class Cancelled(Exception):
@@ -2857,6 +2883,7 @@ def main():
         print(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} start")
     if not ensure_packages():
         return 1
+    install_https_trust()
 
     STATE.folder = pick_folder()
     STATE.out_dir = STATE.folder / OUTPUT_DIRNAME
