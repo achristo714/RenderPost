@@ -27,6 +27,7 @@ import time
 import uuid
 import asyncio
 import base64
+import glob
 import hashlib
 import secrets
 import shutil
@@ -48,7 +49,7 @@ from prompts import (
 )
 
 APP_NAME = "RenderPost"
-APP_VERSION = "1.13.1"
+APP_VERSION = "1.13.2"
 # Optional: where the exe checks for a newer release. Point this at your GitHub repo's
 # latest-release API and the header shows an "Update available" link when a newer tag exists.
 # e.g. "https://api.github.com/repos/YOURNAME/renderpost/releases/latest"   ("" = don't check)
@@ -659,8 +660,10 @@ def run_ffmpeg(args):
     exe = ffmpeg_exe()
     if not exe:
         raise RuntimeError("ffmpeg is not available in this build, so clips can't be stitched.")
+    # ffmpeg writes UTF-8 (paths included); text=True would decode it with the Windows ANSI code page
+    # and crash on folder names with characters like "Á", Greek or Cyrillic letters.
     r = subprocess.run([exe, "-y", "-hide_banner", "-loglevel", "error", *args],
-                       capture_output=True, text=True, timeout=900)
+                       capture_output=True, encoding="utf-8", errors="replace", timeout=900)
     if r.returncode != 0:
         raise RuntimeError("ffmpeg: " + (r.stderr.strip().splitlines() or ["failed"])[-1])
 
@@ -680,7 +683,7 @@ def probe_video(path):
     exe = ffmpeg_exe()
     if not exe:
         return None
-    r = subprocess.run([exe, "-hide_banner", "-i", str(path)], capture_output=True, text=True)
+    r = subprocess.run([exe, "-hide_banner", "-i", str(path)], capture_output=True, encoding="utf-8", errors="replace")
     m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", r.stderr)
     d = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else None
     wh = re.search(r"Video:.*?(\d{2,5})x(\d{2,5})", r.stderr)
@@ -953,17 +956,24 @@ class Fal:
             args = {"image_url": image_urls[0], "duration": str(cfg["video_duration"]),
                     "generate_audio": audio}
             shots = split_shots(prompt)
+            total = int(cfg["video_duration"])
+            if len(shots) > 1:
+                # Each shot needs at least 3s, and the shots must add up to the chosen length so fal
+                # bills what the estimate showed (3 shots of a 5s clip used to go out as 3+3+3 = 9s).
+                # Extra shots merge into the last one that fits; under 6s that leaves a single shot.
+                fit = max(1, total // 3)
+                if len(shots) > fit:
+                    shots = shots[:fit - 1] + [" ".join(shots[fit - 1:])]
             if len(shots) > 1:
                 # Kling's documented multi-shot storyboard: one prompt+duration per shot, total <= 15s
-                total = int(cfg["video_duration"])
-                per = max(3, total // len(shots))
+                per = total // len(shots)
                 durs = [per] * len(shots)
-                durs[-1] = max(3, total - per * (len(shots) - 1))
+                durs[-1] = total - per * (len(shots) - 1)
                 args["multi_prompt"] = [{"prompt": sp, "duration": str(d)} for sp, d in zip(shots, durs)]
                 args["shot_type"] = "customize"
                 args["duration"] = str(sum(durs))
             else:
-                args["prompt"] = prompt
+                args["prompt"] = shots[0]
             endpoint = VIDEO_MODELS["kling"]["i2v"]
         else:
             args = {"prompt": prompt, "image_url": image_urls[0], "resolution": cfg["video_res"],
@@ -971,35 +981,37 @@ class Fal:
                     "generate_audio": audio}
             endpoint = VIDEO_MODELS["seedance"]["i2v"]
 
-        def call():
-            handle = self.c.submit(endpoint, arguments=args)
-            while True:
-                if cancelled():
-                    try:
-                        handle.cancel()
-                    except Exception:
-                        pass
-                    raise Cancelled()
-                if isinstance(handle.status(), self.mod.Completed):
-                    break
-                time.sleep(2.0)
-            r = handle.get()
-            url = (r.get("video") or {}).get("url")
-            if not url:
-                raise RuntimeError("The model returned no video. It may have refused the prompt; try rewording it.")
-            return url
-        return with_retry(call, attempts=2)
+        r = self._run(endpoint, args, cancelled, poll=2.0)
+        url = (r.get("video") or {}).get("url")
+        if not url:
+            raise RuntimeError("The model returned no video. It may have refused the prompt; try rewording it.")
+        return url
+
+    def _run(self, endpoint, args, cancelled=lambda: False, poll=1.0):
+        """Submit one paid job, wait for it, return its result. Only the submit itself and each
+        individual status/result read are retried: a hiccup while waiting re-reads the SAME job
+        instead of submitting (and paying for) a second one, which the old whole-job retry did."""
+        handle = with_retry(lambda: self.c.submit(endpoint, arguments=args), attempts=2)
+        while True:
+            if cancelled():
+                try:
+                    handle.cancel()
+                except Exception:
+                    pass
+                raise Cancelled()
+            if isinstance(with_retry(handle.status), self.mod.Completed):
+                break
+            time.sleep(poll)
+        return with_retry(handle.get)
 
     def generate_character(self, desc):
         args = {"prompt": CHARACTER_T2I.format(desc=desc.strip()), "aspect_ratio": "3:4",
                 "resolution": "1K", "num_images": 1, "output_format": "png"}
-        def call():
-            r = self.c.subscribe("fal-ai/nano-banana-pro", arguments=args)
-            urls = [im["url"] for im in r.get("images", [])]
-            if not urls:
-                raise RuntimeError("No image came back. Try a plainer description.")
-            return urls[0]
-        return with_retry(call, attempts=2)
+        r = self._run("fal-ai/nano-banana-pro", args)
+        urls = [im["url"] for im in r.get("images", [])]
+        if not urls:
+            raise RuntimeError("No image came back. Try a plainer description.")
+        return urls[0]
 
     def write_prompt(self, image_url, style_notes, previous=None, character_url=None, character_note=""):
         brief = BASE_BRIEF
@@ -1041,25 +1053,11 @@ class Fal:
             args = {"prompt": prompt, "image_urls": urls, "aspect_ratio": "auto",
                     "resolution": cfg["resolution"], "num_images": n, "output_format": "png"}
 
-        def call():
-            handle = self.c.submit(m["endpoint"], arguments=args)
-            while True:
-                if cancelled():
-                    try:
-                        handle.cancel()
-                    except Exception:
-                        pass
-                    raise Cancelled()
-                st = handle.status()
-                if isinstance(st, self.mod.Completed):
-                    break
-                time.sleep(1.0)
-            r = handle.get()
-            urls = [im["url"] for im in r.get("images", [])]
-            if not urls:
-                raise RuntimeError("The model returned no image. It may have refused the prompt; try rewording it.")
-            return urls
-        return with_retry(call)
+        r = self._run(m["endpoint"], args, cancelled)
+        urls = [im["url"] for im in r.get("images", [])]
+        if not urls:
+            raise RuntimeError("The model returned no image. It may have refused the prompt; try rewording it.")
+        return urls
 
     @staticmethod
     def download(url, out_path):
@@ -1280,7 +1278,7 @@ async def _mcp_upload_step(session, step, args):
         return json.loads(r.read().decode("utf-8"))
 
 
-async def _mcp_run_steps(url, headers, steps, args, cancelled):
+async def _mcp_run_steps(url, headers, steps, args, cancelled, progress=None):
     """Run an ordered sequence of MCP tool calls against a remote (Streamable HTTP) MCP server —
     e.g. upload an image, generate, wait for the job, fetch the result — accumulating each step's
     extracted output into `args` so later steps can reference it. Returns the last step's
@@ -1302,7 +1300,11 @@ async def _mcp_run_steps(url, headers, steps, args, cancelled):
     import-by-URL tool at all) is a two-phase upload instead of a plain tool call: the MCP tool call
     mints a short-lived upload slot, then this app itself POSTs the actual file bytes — fetched from
     the URL "upload_from" resolves to — straight to that slot as a plain multipart/form-data
-    request, no MCP tool call for the byte transfer itself. See _mcp_upload_step()."""
+    request, no MCP tool call for the byte transfer itself. See _mcp_upload_step().
+
+    `progress` (a dict the caller keeps across retries) records each finished step and the args
+    it produced. A retry resumes after the last finished step in a fresh session, so a failure
+    while waiting re-polls the job already submitted instead of paying to generate it again."""
     import mcp
     import httpx2
     from mcp.client.streamable_http import streamable_http_client
@@ -1313,7 +1315,14 @@ async def _mcp_run_steps(url, headers, steps, args, cancelled):
         mcp.ClientSession(read, write, client_info=mcp.types.Implementation(name=APP_NAME, version=APP_VERSION)) as session,
     ):
         await session.initialize()
-        for step in steps:
+        if progress is None:
+            progress = {}
+        if "args" in progress:
+            args = dict(progress["args"])
+            out = progress.get("out")
+        for idx, step in enumerate(steps):
+            if idx < progress.get("next", 0):
+                continue   # finished on an earlier attempt (e.g. the paid generate step)
             if step.get("when") and not args.get(step["when"]):
                 continue   # optional step (e.g. importing a character reference that wasn't provided) — skipped entirely
             if step.get("poll"):
@@ -1353,6 +1362,7 @@ async def _mcp_run_steps(url, headers, steps, args, cancelled):
             out = _dig(data, field) if field else data
             if step.get("output_as"):
                 args[step["output_as"]] = out
+            progress.update(next=idx + 1, args=dict(args), out=out)
     return out
 
 
@@ -1429,7 +1439,7 @@ class AggregatorProvider:
             return self._call_mcp(op_def, args, cancelled)
         return self._call_rest(op_def, args, cancelled)
 
-    def _call_mcp(self, op_def, args, cancelled, _retried=False):
+    def _call_mcp(self, op_def, args, cancelled, _retried=False, _progress=None):
         steps = op_def.get("steps")
         if not steps:
             raise RuntimeError(f"{self.label()} has no steps configured for this operation.")
@@ -1441,9 +1451,10 @@ class AggregatorProvider:
         # TaskGroup wrapper with_retry would see.
         attempts, delay = 3, 4
         out = None
+        progress = {} if _progress is None else _progress
         for i in range(attempts):
             try:
-                out = asyncio.run(_mcp_run_steps(self.defn["mcp_url"], self._headers(), steps, dict(args), cancelled))
+                out = asyncio.run(_mcp_run_steps(self.defn["mcp_url"], self._headers(), steps, dict(args), cancelled, progress))
                 break
             except Cancelled:
                 raise
@@ -1456,6 +1467,11 @@ class AggregatorProvider:
                 cause = e
                 while getattr(cause, "exceptions", None):
                     cause = cause.exceptions[0]
+                if isinstance(cause, Cancelled):
+                    # Cancel raised inside the mcp SDK's task group arrives wrapped, so the plain
+                    # `except Cancelled` above never sees it; without this it retried 3 times and
+                    # ended as a failure with the blank error "Higgsfield: ".
+                    raise Cancelled()
                 msg = str(cause)
                 # Full detail to stdout (log.txt in the exe) — the message that reaches the UI is kept
                 # short by design, but this class of error (a real API's exact failure reason, buried
@@ -1476,7 +1492,7 @@ class AggregatorProvider:
                 # falls through to the normal retry below.
                 if (("401" in msg or "unauthorized" in msg.lower() or "Server returned an error response" in msg)
                         and not _retried and self._refresh_oauth()):
-                    return self._call_mcp(op_def, args, cancelled, _retried=True)
+                    return self._call_mcp(op_def, args, cancelled, _retried=True, _progress=progress)
                 if i == attempts - 1:
                     raise RuntimeError(f"{self.label()}: {msg}") from e
                 time.sleep(delay); delay *= 2
@@ -1603,9 +1619,12 @@ class AggregatorProvider:
         # confirmed live: the exact same URL succeeds with curl (which sends its own UA) and fails
         # with plain urlopen(). Every other outbound request in this class already sends one
         # (_request(), _mcp_upload_step()); this was the one spot that didn't.
-        req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
-        with urllib.request.urlopen(req, timeout=300) as resp:
-            out_path.write_bytes(resp.read())
+        # Retried like Fal.download: the result is already paid for when this runs.
+        def fetch():
+            req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                out_path.write_bytes(resp.read())
+        with_retry(fetch)
 
 
 class DemoAggregator:
@@ -1644,6 +1663,28 @@ class State:
         self.clips = []            # list of dicts, see new_clip()
         self.clip_urls = {}        # (name,file) -> fal url of the uploaded enhanced image
         self.providers = {}        # provider id -> AggregatorProvider/DemoAggregator, lazily built
+        self.claimed = set()       # output paths a running job has reserved but not written yet
+
+    def save_result(self, gen, url, folder, pattern, start=1):
+        """Download a paid result to the first free numbered name (pattern like "x_v{:02d}.png").
+        The number is reserved under the lock before the download starts, so two jobs finishing
+        together can't both pick the same free name and overwrite each other's file."""
+        with self.lock:
+            n = start
+            while (folder / pattern.format(n)).exists() or (folder / pattern.format(n)) in self.claimed:
+                n += 1
+            out = folder / pattern.format(n)
+            self.claimed.add(out)
+        tmp = out.with_name(out.stem + ".tmp" + out.suffix)
+        try:
+            gen.download(url, tmp)
+            os.replace(tmp, out)
+        finally:
+            with self.lock:
+                self.claimed.discard(out)
+            if tmp.exists():
+                tmp.unlink()
+        return out
 
     def generator_for(self, model_entry):
         """fal (default) or an aggregator client, per this model/video-model catalog entry's
@@ -1687,7 +1728,8 @@ class State:
                 # versions on disk win over the json (files may have been deleted by hand)
                 versions = []
                 legacy = self.out_dir / f"{name}_enhanced.png"
-                files = sorted(self.out_dir.glob(f"{name}_v[0-9][0-9].png")) + sorted(self.out_dir.glob(f"{name}_a[0-9][0-9].png"))
+                esc = glob.escape(name)           # a name like "View [A]" is not a glob pattern
+                files = sorted(self.out_dir.glob(f"{esc}_v[0-9][0-9].png")) + sorted(self.out_dir.glob(f"{esc}_a[0-9][0-9].png"))
                 if legacy.exists() and not files:
                     legacy.rename(self.out_dir / f"{name}_v01.png")
                     files = [self.out_dir / f"{name}_v01.png"]
@@ -1825,24 +1867,29 @@ class State:
                 raise RuntimeError(f"This clip's video model (\"{c.get('vmodel')}\") is no longer available. Remove this clip and make a new one.")
             gen = self.generator_for(vmodel_entry)
             clip_char_url = self.character_url() if (not take and with_char and c.get("vmodel") in CHAR_REFERENCE_VIDEO_MODELS) else None
-            url = gen.video(prompt, urls, {**cfg, "_model_extra": _model_extra_args(vmodel_entry)}, take, cancelled,
+            # The clip's own model decides the call, never whatever the dropdown says now: the client
+            # above was picked from c["vmodel"], and Fal.video reads cfg["video_model"], so the two
+            # must agree or a draft can run (and bill) a different model than its card shows.
+            vcfg = {**cfg, "_model_extra": _model_extra_args(vmodel_entry)}
+            if not take and c.get("vmodel"):
+                vcfg["video_model"] = c["vmodel"]
+            url = gen.video(prompt, urls, vcfg, take, cancelled,
                              extra_urls=[clip_char_url] if clip_char_url else ())
             self.clip_set(cid, step="downloading")
             self.video_dir.mkdir(exist_ok=True)
             base = "take" if take else Path(c["sources"][0]["file"]).stem
-            n = 1
-            while (self.video_dir / f"{base}_clip{n:02d}.mp4").exists():
-                n += 1
-            out = self.video_dir / f"{base}_clip{n:02d}.mp4"
-            gen.download(url, out)
+            out = self.save_result(gen, url, self.video_dir, base + "_clip{:02d}.mp4")
             pr = probe_video(out)
             extra = {}
             if pr and pr[1]:
                 extra = {"out_size": [pr[0], pr[1]], "resolution": f"{pr[1]}p", "duration": str(round(pr[2] or float(c["duration"]), 1))}
+            # Price it at the tier it was ordered at (e.g. Kling "4k", Veo "ultra"), before the
+            # measured height overwrites "resolution" for display; the measured duration still counts.
+            cost = self.video_cost({**self.clip(cid), "duration": extra.get("duration", c["duration"])}, cfg)
             self.clip_set(cid, status="done", step="", file=out.name, seconds=round(time.time() - t0),
                           made=time.strftime("%Y-%m-%d %H:%M"), **extra)
             self.save_clips()
-            self.add_spend(self.video_cost(self.clip(cid), cfg))
+            self.add_spend(cost)
         except Cancelled:
             self.clip_set(cid, status="ready" if c.get("prompt") else "failed", step="", error=None, _cancel=False)
         except Exception as e:
@@ -1879,20 +1926,14 @@ class State:
                     raise Cancelled()
                 self.set(name, step=f"angle {i} of {len(prompts)}")
                 urls = gen.edit(url, ptxt, one, tuple(dims), cancelled, [char] if char else [])
-                k = 1
-                while (self.out_dir / f"{name}_a{k:02d}.png").exists():
-                    k += 1
-                out = self.out_dir / f"{name}_a{k:02d}.png"
-                tmp = out.with_suffix(".tmp.png")
-                gen.download(urls[0], tmp)
-                shutil.move(str(tmp), str(out))
+                self.add_spend(self.image_cost(cfg, 1))          # paid as soon as it came back
+                out = self.save_result(gen, urls[0], self.out_dir, name + "_a{:02d}.png")
                 made.append({"file": out.name, "prompt": ptxt, "out_size": image_dims(out), "seconds": round(time.time() - t0),
                              "model": cfg["model"], "quality": cfg["quality"] if MODELS[cfg["model"]]["kind"] == "gpt" else (f'{cfg["quality"]} · {cfg["resolution"]}' if MODELS[cfg["model"]]["kind"] == "gptres" else cfg["resolution"]),
                              "made": time.strftime("%Y-%m-%d %H:%M"), "pick": False, "angle": True, "from": file})
                 with self.lock:
                     it["versions"] = it["versions"] + [made[-1]]
                 self.save_prompts()
-                self.add_spend(self.image_cost(cfg, 1))
             self.set(name, status="done", step="")
         except Cancelled:
             with self.lock:
@@ -2038,25 +2079,24 @@ class State:
             model_entry = MODELS.get(cfg["model"])
             gen = self.generator_for(model_entry)
             urls = gen.edit(url, prompt, {**cfg, "_model_extra": _model_extra_args(model_entry)}, (w, h), cancelled, [char] if char else [])
+            # Every returned image is already paid for, so count it now, not only once it's saved.
+            self.add_spend(self.image_cost(cfg, len(urls)))
             self.set(name, step="downloading")
             made = []
-            for u in urls:
-                n = len(it["versions"]) + len(made) + 1
-                while (self.out_dir / f"{name}_v{n:02d}.png").exists():
-                    n += 1
-                out = self.out_dir / f"{name}_v{n:02d}.png"
-                tmp = out.with_suffix(".tmp.png")
-                gen.download(u, tmp)
-                shutil.move(str(tmp), str(out))
-                made.append({"file": out.name, "prompt": prompt, "out_size": image_dims(out),
-                             "seconds": round(time.time() - t0), "model": cfg["model"],
-                             "quality": cfg["quality"] if MODELS[cfg["model"]]["kind"] == "gpt" else (f'{cfg["quality"]} · {cfg["resolution"]}' if MODELS[cfg["model"]]["kind"] == "gptres" else cfg["resolution"]),
-                             "made": time.strftime("%Y-%m-%d %H:%M"), "pick": False, "character": bool(char)})
-            with self.lock:
-                it["versions"] = it["versions"] + made
-                it.update(status="done", step="")
-            self.save_prompts()
-            self.add_spend(self.image_cost(cfg, len(made)))
+            try:
+                for u in urls:
+                    out = self.save_result(gen, u, self.out_dir, name + "_v{:02d}.png", len(it["versions"]) + len(made) + 1)
+                    made.append({"file": out.name, "prompt": prompt, "out_size": image_dims(out),
+                                 "seconds": round(time.time() - t0), "model": cfg["model"],
+                                 "quality": cfg["quality"] if MODELS[cfg["model"]]["kind"] == "gpt" else (f'{cfg["quality"]} · {cfg["resolution"]}' if MODELS[cfg["model"]]["kind"] == "gptres" else cfg["resolution"]),
+                                 "made": time.strftime("%Y-%m-%d %H:%M"), "pick": False, "character": bool(char)})
+            finally:
+                # If one variation fails to download, the ones already saved still show up.
+                if made:
+                    with self.lock:
+                        it["versions"] = it["versions"] + made
+                    self.save_prompts()
+            self.set(name, status="done", step="")
         except Cancelled:
             with self.lock:
                 it.update(status=self._resting_status(it), step="", error=None, _cancel=False)
@@ -2347,7 +2387,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 src = STATE.out_dir / file
                 if src.exists():
-                    shutil.move(str(src), str(trash / file))
+                    # Version numbers get reused after a delete, so trash can already hold an older
+                    # file of this name; never overwrite it (shutil.move would on Windows).
+                    dest, k = trash / file, 2
+                    while dest.exists():
+                        dest = trash / f"{src.stem} ({k}){src.suffix}"
+                        k += 1
+                    shutil.move(str(src), str(dest))
                 pk = STATE.out_dir / "picks" / file
                 if pk.exists():
                     pk.unlink()
@@ -2634,7 +2680,10 @@ class Handler(BaseHTTPRequestHandler):
                 if c["status"] == "done":                      # remake: new draft, keep the old clip
                     c = STATE.new_clip(c["kind"], c["sources"], cfg)
                 with STATE.lock:
-                    c.update(status="queued", step="waiting", error=None, _cancel=False, prompt=p)
+                    # A draft takes the current Video model/resolution/duration, the same as the
+                    # confirm dialog priced it, not whatever was selected when its prompt was written.
+                    c.update(status="queued", step="waiting", error=None, _cancel=False, prompt=p,
+                             **STATE._clip_cfg_fields(c["kind"], cfg))
                 STATE.pool.submit(STATE._clip_job, c["id"], "enhance" if p else "full", p or None, cfg)
             STATE.save_clips()
             return self._send(200, {"ok": True})
